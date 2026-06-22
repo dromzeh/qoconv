@@ -1,0 +1,25 @@
+# Build artifacts (anchored to repo root so they don't match cmd/qoconv/)
+/dist/
+/bin/
+/qoconv
+/qoconv.exe
+*.exe
+
+# Real Quaver/osu skins used for manual testing redistribute third-party art
+# ("i dont take credit for any assets used") — keep them OUT of the repo.
+*.qs
+*.osk
+/testdata/real/
+/out/
+/tmp/
+
+# Go
+*.test
+*.out
+go.work
+go.work.sum
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
