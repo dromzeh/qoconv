@@ -27,14 +27,15 @@ ColumnColor1 = 0,0,0
 
 func TestBuildMania(t *testing.T) {
 	sk := quaver.ParseString(sample4K)
-	m := buildMania(sk.KeyMode(4), 4, 410)
+	m := buildMania(sk.KeyMode(4), 4, 450)
 
 	want := map[string]string{
 		"ColumnStart":             "252",
 		"ColumnWidth":             "88,88,88,88",
 		"WidthForNoteHeightScale": "88",
-		"HitPosition":             "410",
-		"LightPosition":           "410",
+		"HitPosition":             "450",
+		"LightPosition":           "450",
+		"NoteBodyStyle":           "0", // stretch LN bodies like Quaver
 		"ScorePosition":           "187",
 		"ComboPosition":           "165",
 		"KeysUnderNotes":          "1", // inverse of ReceptorsOverHitObjects=false

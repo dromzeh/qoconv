@@ -42,6 +42,7 @@ func buildSampleSkin(t *testing.T) string {
 	}
 	add("4k/Stage/stage-left-border.png", 43, 677)
 	add("4k/Stage/stage-right-border.png", 474, 768)
+	add("4k/Stage/stage-hitposition-overlay.png", 566, 30)
 	for _, j := range []string{"Marv", "Perf", "Great", "Good", "Okay", "Miss"} {
 		add("Judgements/Judge-"+j+".png", 270, 270)
 	}
@@ -95,7 +96,7 @@ func TestConvertEndToEnd(t *testing.T) {
 		"Keys: 4",
 		"ColumnWidth: 88,88,88,88",
 		"ColumnStart: 252",
-		"HitPosition: 410",
+		"HitPosition: 450",
 		"ComboPosition: 165",
 		"NoteImage0: qo-note-1",
 		"NoteImage0H: qo-head-1", // hold head
@@ -129,10 +130,16 @@ func TestConvertEndToEnd(t *testing.T) {
 		t.Errorf("scorebar-bg size = %dx%d (err %v), want 600x37 (rotated)", w, h, err)
 	}
 
-	// Receptor: tall 250x400 source squared to ColumnSize (140) then bottom-padded
-	// (42px for HitPosition 410) so the bottom-anchored circle reaches the line.
-	if w, h, err := imageops.Size(res.Output.Files["qo-key-1.png"]); err != nil || w != 140 || h != 182 {
-		t.Errorf("qo-key-1 size = %dx%d (err %v), want 140x182 (squared + padded)", w, h, err)
+	// Receptor: 250x400 source scaled like Quaver draws it — ColumnSize (140)
+	// wide, aspect height 224 — with no bottom pad (ReceptorPosOffsetY = 0).
+	if w, h, err := imageops.Size(res.Output.Files["qo-key-1.png"]); err != nil || w != 140 || h != 224 {
+		t.Errorf("qo-key-1 size = %dx%d (err %v), want 140x224 (aspect-scaled)", w, h, err)
+	}
+
+	// Stage hint: 566x30 source bottom-padded by its own height so its bottom
+	// edge sits on osu!'s centred hit line.
+	if w, h, err := imageops.Size(res.Output.Files["qo-stage-hint.png"]); err != nil || w != 566 || h != 60 {
+		t.Errorf("qo-stage-hint size = %dx%d (err %v), want 566x60 (bottom-padded)", w, h, err)
 	}
 
 	// Dropped folders reported.

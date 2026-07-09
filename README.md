@@ -10,7 +10,7 @@ Convert your Quaver skins to osu!mania. Works as a guided TUI or a one-line comm
 > [!NOTE]
 > Not every mapping is 1:1 yet. This handles the core elements needed for a solid skin conversion. It's Quaver to osu!mania only (no osu!mania to Quaver), though the reverse may come later since most of the logic already exists.
 
-Hit positions are computed from each skin's receptor geometry rather than hardcoded, so they adapt per skin. A value may still need a small manual tweak in the generated `skin.ini`. osu!stable (what I personally use) is closed-source, so the osu!mania positioning was reverse-engineered from osu! lazer's `Legacy*` mania classes and matched against them.
+Hit positions are computed from each skin's receptor geometry and `HitPosOffsetY`, so they adapt per skin. A value may still need a small manual tweak in the generated `skin.ini`. osu!stable (what I personally use) is closed-source, so the osu!mania positioning was reverse-engineered from osu! lazer's `Legacy*` mania classes and matched against them.
 
 ## What it converts
 

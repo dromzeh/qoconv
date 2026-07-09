@@ -52,7 +52,7 @@ func firstNonEmpty(a, b string) string {
 
 // buildMania maps a Quaver [nK] config section to an osu! [Mania] block's
 // geometry, colors, and flags. Image-path keys are appended later (asset stage).
-// receptorHeight is the pixel height of receptor-up-1 (couples HitPosition/LightPosition).
+// hitPosition is the precomputed osu! note-landing line (see HitPosition).
 func buildMania(cfg *quaver.Section, keys, hitPosition int) *osu.Mania {
 	m := osu.NewMania(keys)
 	kv := m.KV
@@ -63,9 +63,13 @@ func buildMania(cfg *quaver.Section, keys, hitPosition int) *osu.Mania {
 
 	kv.SetInt("ColumnStart", ColumnStart(cfg.Int("ColumnAlignment", 0), columnSize, keys, colWidthF))
 	kv.Set("ColumnWidth", csv(colWidth, keys))
-	// Quaver notes/receptors are square (e.g. 150×150); pin the note height scale
-	// to the column width so osu! renders them square instead of stretched tall.
-	kv.SetInt("WidthForNoteHeightScale", colWidth)
+	// Quaver sizes note heights from WidthForNoteHeightScale when set, else from
+	// ColumnSize; osu!'s key has the same meaning in its own (÷1.6) space.
+	if q := cfg.Int("WidthForNoteHeightScale", 0); q > 0 {
+		kv.SetInt("WidthForNoteHeightScale", roundI(float64(q)/R))
+	} else {
+		kv.SetInt("WidthForNoteHeightScale", colWidth)
+	}
 	if sp := roundI(ColumnSpacingF(cfg.Int("StageReceptorPadding", 0))); sp != 0 {
 		kv.Set("ColumnSpacing", csv(sp, keys-1))
 	}
@@ -73,6 +77,10 @@ func buildMania(cfg *quaver.Section, keys, hitPosition int) *osu.Mania {
 	kv.SetInt("LightPosition", hitPosition) // the stage light flashes at the hit line
 	kv.SetInt("ScorePosition", ScorePosition(cfg.Int("JudgementBurstPosY", 0)))
 	kv.SetInt("ComboPosition", ComboPosition(cfg.Int("ComboPosY", 0)))
+
+	// Quaver stretches LN bodies between head and tail; osu!'s default on modern
+	// skin versions tiles the texture instead. 0 = stretch.
+	kv.SetInt("NoteBodyStyle", 0)
 
 	// ReceptorsOverHitObjects is the inverse of osu! KeysUnderNotes.
 	kv.SetInt("KeysUnderNotes", b2i(!cfg.Bool("ReceptorsOverHitObjects", false)))

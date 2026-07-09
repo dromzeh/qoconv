@@ -21,19 +21,33 @@ func TestCoordsGolden(t *testing.T) {
 	if got := ScorePosition(-85); got != 187 {
 		t.Errorf("ScorePosition = %d, want 187", got)
 	}
-	// Judgement line at Quaver's receptor centre: ReceptorPosOffsetY=0,
-	// receptor 250x400 -> centre 656/768 -> 410 in osu! 480-space.
-	if got := HitPosition(0, columnSize, 250, 400); got != 410 {
-		t.Errorf("HitPosition = %d, want 410", got)
+	// Note-landing line (note bottom at hit time) = receptor top + HitPosOffsetY:
+	// receptor 250x400 scaled to 140 wide -> 224 tall; 768 - 0 - 224 + 176 = 720
+	// -> 450 in osu! 480-space.
+	if got := HitPosition(0, 176, columnSize, 250, 400); got != 450 {
+		t.Errorf("HitPosition = %d, want 450", got)
+	}
+	// HitPosOffsetY=0 (Bar default): note bottom on the receptor top -> 340.
+	if got := HitPosition(0, 0, columnSize, 250, 400); got != 340 {
+		t.Errorf("HitPosition (offset 0) = %d, want 340", got)
 	}
 	// Unknown receptor size -> osu! default.
-	if got := HitPosition(0, 0, 0, 0); got != OsuDefaultHitPosition {
+	if got := HitPosition(0, 0, 0, 0, 0); got != OsuDefaultHitPosition {
 		t.Errorf("HitPosition fallback = %d, want %d", got, OsuDefaultHitPosition)
 	}
-	// Receptor bottom-pad lifts the squared circle onto the line:
-	// (480-410)*1.6 - 140/2 = 112 - 70 = 42.
-	if got := ReceptorBottomPad(410, columnSize); got != 42 {
-		t.Errorf("ReceptorBottomPad = %d, want 42", got)
+	// osu! clamps HitPosition to 240..480.
+	if got := HitPosition(0, 600, columnSize, 250, 400); got != 480 {
+		t.Errorf("HitPosition clamp = %d, want 480", got)
+	}
+	// Receptor bottom-pad replicates Quaver's ReceptorPosOffsetY (never negative).
+	if got := ReceptorBottomPad(0); got != 0 {
+		t.Errorf("ReceptorBottomPad(0) = %d, want 0", got)
+	}
+	if got := ReceptorBottomPad(24); got != 24 {
+		t.Errorf("ReceptorBottomPad(24) = %d, want 24", got)
+	}
+	if got := ReceptorBottomPad(-8); got != 0 {
+		t.Errorf("ReceptorBottomPad(-8) = %d, want 0", got)
 	}
 	if got := ColumnStart(0, columnSize, keys, colW); got != 252 {
 		t.Errorf("ColumnStart = %d, want 252", got)

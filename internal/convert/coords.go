@@ -44,38 +44,43 @@ func clampHitPosition(v int) int {
 // OsuDefaultHitPosition is osu!mania's stock judgement-line height.
 const OsuDefaultHitPosition = 402
 
-// HitPosition is the osu! judgement line (where notes are hit), as a distance
-// from the TOP of the 480-tall playfield — confirmed from osu! source
-// (LegacyManiaSkinDecoder: stored as (480 − clamp(N,240,480)) × 1.6, applied as
-// bottom-padding, so the line lands N px from the top; default 402 ≈ near the
-// bottom). osu! does NOT move the receptor with this — the receptor is anchored
-// to the stage bottom and is aligned separately by padding its image.
+// HitPosition is the osu! judgement line, as a distance from the TOP of the
+// 480-tall playfield — confirmed from osu! source (LegacyManiaSkinDecoder:
+// stored as (480 − clamp(N,240,480)) × 1.6, applied as bottom-padding). At hit
+// time osu! lands the note's BOTTOM edge on this line (DrawableManiaHitObject /
+// LegacyNotePiece anchor BottomCentre in downscroll); the same holds for LN
+// heads and tails at their start/end times.
 //
-// We target Quaver's receptor centre: it sits ReceptorPosOffsetY up from the
-// bottom, scaled to ColumnSize wide, so its centre (from the top, 768 space) is
-// 768 − ReceptorPosOffsetY − receptorH×ColumnSize/receptorW/2; ÷1.6 → 480 space.
-// e.g. ColumnSize 140 with a 250x400 receptor -> 410. Falls back to osu!'s
-// default when the receptor size is unknown.
-func HitPosition(receptorPosOffsetY, columnSize, receptorW, receptorH int) int {
+// Quaver's equivalent line (GameplayPlayfieldKeys.SetReferencePositions) is
+// where the note's bottom edge sits at hit time:
+//
+//	HitLineY = ReceptorTopY + HitPosOffsetY
+//	         = 768 − ReceptorPosOffsetY − receptorH×ColumnSize/receptorW + HitPosOffsetY
+//
+// (the receptor is drawn ColumnSize wide, aspect-scaled tall, with its bottom
+// ReceptorPosOffsetY up from the screen bottom). ÷1.6 maps it into 480 space.
+// e.g. ColumnSize 140, 250x400 receptor, HitPosOffsetY 176 -> 450. Falls back
+// to osu!'s default when the receptor size is unknown.
+func HitPosition(receptorPosOffsetY, hitPosOffsetY, columnSize, receptorW, receptorH int) int {
 	if columnSize <= 0 || receptorW <= 0 {
 		return OsuDefaultHitPosition
 	}
 	receptorScaledH := float64(receptorH) * float64(columnSize) / float64(receptorW)
-	centerFromTop := 768.0 - float64(receptorPosOffsetY) - receptorScaledH/2.0
-	return clampHitPosition(roundI(centerFromTop / R))
+	lineFromTop := 768.0 - float64(receptorPosOffsetY) - receptorScaledH + float64(hitPosOffsetY)
+	return clampHitPosition(roundI(lineFromTop / R))
 }
 
 // ReceptorBottomPad returns the transparent padding (in source pixels) to add
-// BELOW a receptor squared to columnSize, so that — once osu! bottom-anchors and
-// ÷1.6-scales it — the receptor's circle centre lands on the judgement line at
-// hitPosition. The circle centre must sit (480 − hitPosition) × 1.6 px above the
-// image bottom; the squared circle's centre is already columnSize/2 up.
-func ReceptorBottomPad(hitPosition, columnSize int) int {
-	pad := roundI(float64(480-hitPosition)*R) - columnSize/2
-	if pad < 0 {
+// BELOW a receptor image. osu! bottom-anchors key images to the screen and
+// draws them at native pixel height (px map 1:1 into its 768-tall space),
+// ignoring HitPosition entirely — which matches Quaver, where the receptor's
+// bottom edge sits ReceptorPosOffsetY above the screen bottom. So the pad is
+// simply ReceptorPosOffsetY (never negative).
+func ReceptorBottomPad(receptorPosOffsetY int) int {
+	if receptorPosOffsetY < 0 {
 		return 0
 	}
-	return pad
+	return receptorPosOffsetY
 }
 
 // ColumnStart inverts the gist ColumnAlignment formula:

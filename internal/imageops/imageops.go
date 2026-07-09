@@ -107,38 +107,6 @@ func PadBottom(src image.Image, px int) image.Image {
 	return dst
 }
 
-// TrimTransparent crops fully/near-transparent margins, returning the tight
-// bounding box of opaque content. Returns src unchanged if it's all transparent.
-func TrimTransparent(src image.Image) image.Image {
-	b := src.Bounds()
-	minX, minY := b.Max.X, b.Max.Y
-	maxX, maxY := b.Min.X-1, b.Min.Y-1
-	for y := b.Min.Y; y < b.Max.Y; y++ {
-		for x := b.Min.X; x < b.Max.X; x++ {
-			if _, _, _, a := src.At(x, y).RGBA(); a > 0x1000 { // ~ alpha8 > 16
-				if x < minX {
-					minX = x
-				}
-				if x > maxX {
-					maxX = x
-				}
-				if y < minY {
-					minY = y
-				}
-				if y > maxY {
-					maxY = y
-				}
-			}
-		}
-	}
-	if maxX < minX || maxY < minY {
-		return src
-	}
-	dst := image.NewNRGBA(image.Rect(0, 0, maxX-minX+1, maxY-minY+1))
-	draw.Draw(dst, dst.Bounds(), src, image.Pt(minX, minY), draw.Src)
-	return dst
-}
-
 var sheetRe = regexp.MustCompile(`(?i)^(.*)@(\d+)x(\d+)\.png$`)
 
 // ParseSheetName extracts the base name and grid (rows × cols) from Quaver's

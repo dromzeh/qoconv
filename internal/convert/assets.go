@@ -91,7 +91,7 @@ var laneElements = []laneElement{
 	{"receptor-down", "Receptors", "qo-keyD", "KeyImage%dD", true, false},
 }
 
-func mapKeymodeAssets(src quaver.Source, mode, columnSize, hitPosition int, out *Output, kv *osu.KV, rep *Report) {
+func mapKeymodeAssets(src quaver.Source, mode, columnSize, receptorPosOffsetY, recW, recH int, out *Output, kv *osu.KV, rep *Report) {
 	m := fmt.Sprintf("%dk", mode)
 	for c := 1; c <= mode; c++ {
 		for _, el := range laneElements {
@@ -102,7 +102,7 @@ func mapKeymodeAssets(src quaver.Source, mode, columnSize, hitPosition int, out 
 			var ok bool
 			switch {
 			case el.receptor:
-				ok = mapReceptor(src, srcPath, out, dstBase+".png", columnSize, hitPosition, rep)
+				ok = mapReceptor(src, srcPath, out, dstBase+".png", columnSize, receptorPosOffsetY, recW, recH, rep)
 			case el.flipV:
 				ok = mapFlippedV(src, srcPath, out, dstBase+".png", rep)
 			default:
@@ -119,30 +119,35 @@ func mapKeymodeAssets(src quaver.Source, mode, columnSize, hitPosition int, out 
 	mapLighting(src, m, out, kv, rep)
 }
 
-// mapReceptor un-stretches AND positions a receptor. osu!mania (1) forces a key
-// image's width to ColumnWidth but takes its height from imageHeight/1.6,
-// distorting a tall padded receptor into an oval, and (2) anchors the receptor
-// to the stage bottom, ignoring HitPosition. So we trim the transparent margins
-// and square the circle to ColumnSize (round under osu!'s ÷1.6 width/height
-// scaling), then pad transparent space BELOW it so the bottom-anchored circle
-// rises to sit on the judgement line at hitPosition.
-func mapReceptor(src quaver.Source, path string, out *Output, dst string, columnSize, hitPosition int, rep *Report) bool {
+// mapReceptor re-renders a receptor the way Quaver draws it. Quaver sizes the
+// receptor sprite from the receptor-up texture: ColumnSize wide, aspect-scaled
+// tall (recH×ColumnSize/recW), bottom edge ReceptorPosOffsetY above the screen
+// bottom; the pressed texture is stretched into the same box. osu! forces a key
+// image's width to ColumnWidth, draws its pixels 1:1 into the 768-tall space,
+// and anchors it to the stage bottom (ignoring HitPosition). So: resample the
+// full canvas (no trimming — the art's placement inside it matters) to
+// ColumnSize × aspect height, then pad transparent rows below it so the
+// bottom-anchored image rises by ReceptorPosOffsetY, exactly as in Quaver.
+// recW/recH are the receptor-up dimensions, used for BOTH states so the
+// pressed image fills the same box as in Quaver.
+func mapReceptor(src quaver.Source, path string, out *Output, dst string, columnSize, receptorPosOffsetY, recW, recH int, rep *Report) bool {
 	data, err := src.ReadFile(path)
 	if err != nil {
 		return false
 	}
 	img, err := imageops.Decode(data)
-	if err != nil || columnSize <= 0 {
+	if err != nil || columnSize <= 0 || recW <= 0 {
 		return rawCopy(out, path, dst, data, rep) // fall back to a raw copy
 	}
-	pad := ReceptorBottomPad(hitPosition, columnSize)
-	img = imageops.PadBottom(imageops.Scale(imageops.TrimTransparent(img), columnSize, columnSize), pad)
+	h := roundI(float64(recH) * float64(columnSize) / float64(recW))
+	pad := ReceptorBottomPad(receptorPosOffsetY)
+	img = imageops.PadBottom(imageops.Scale(img, columnSize, h), pad)
 	enc, err := imageops.Encode(img)
 	if err != nil {
 		return rawCopy(out, path, dst, data, rep)
 	}
 	out.add(dst, enc)
-	rep.converted("%s -> %s (squared to %dpx + %dpx bottom pad to reach hit line)", path, dst, columnSize, pad)
+	rep.converted("%s -> %s (scaled to %dx%d + %dpx bottom pad, Quaver receptor placement)", path, dst, columnSize, h, pad)
 	return true
 }
 
@@ -161,7 +166,15 @@ func mapStage(src quaver.Source, m string, out *Output, kv *osu.KV, rep *Report)
 			kv.Set(s.key, s.dstBase)
 		}
 	}
-	if copyAsset(src, m+"/Stage/stage-hitposition-overlay.png", out, "qo-stage-hint.png", rep) {
+	// osu! draws StageHint CENTRED on the hit line ("the judgement line is drawn
+	// in the centre of the image" — wiki/LegacyHitTarget); Quaver draws the
+	// overlay's BOTTOM edge on the hit line. Pad the canvas below by its own
+	// height so the content's bottom edge becomes the canvas centre.
+	hintPadded := mapImage(src, m+"/Stage/stage-hitposition-overlay.png", out, "qo-stage-hint.png",
+		" (bottom-padded so its bottom edge sits on the hit line)", rep, func(img image.Image) image.Image {
+			return imageops.PadBottom(img, img.Bounds().Dy())
+		})
+	if hintPadded {
 		kv.Set("StageHint", "qo-stage-hint")
 	} else {
 		// No Quaver hit-position overlay -> blank osu!'s default stage-hint line

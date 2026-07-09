@@ -54,15 +54,16 @@ func Convert(sk *quaver.Skin, opts Options) (*Result, error) {
 	for _, mode := range modes {
 		cfg := sk.KeyModeOrEmpty(mode)
 		columnSize := cfg.Int("ColumnSize", 0)
+		receptorPos := cfg.Int("ReceptorPosOffsetY", 0)
+		rW, rH := imgDims(sk.Source, fmt.Sprintf("%dk/Receptors/receptor-up-1.png", mode))
 
 		hitPos := opts.HitPosition
 		if hitPos < 0 {
-			rW, rH := imgDims(sk.Source, fmt.Sprintf("%dk/Receptors/receptor-up-1.png", mode))
-			hitPos = HitPosition(cfg.Int("ReceptorPosOffsetY", 0), columnSize, rW, rH)
+			hitPos = HitPosition(receptorPos, cfg.Int("HitPosOffsetY", 0), columnSize, rW, rH)
 		}
 
 		mania := buildMania(cfg, mode, hitPos)
-		mapKeymodeAssets(sk.Source, mode, columnSize, hitPos, out, mania.KV, rep)
+		mapKeymodeAssets(sk.Source, mode, columnSize, receptorPos, rW, rH, out, mania.KV, rep)
 		skin.Mania = append(skin.Mania, mania)
 		rep.position(maniaSummary(mode, mania))
 	}
