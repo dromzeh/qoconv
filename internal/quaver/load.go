@@ -9,10 +9,11 @@ import (
 // SupportedKeyModes lists the keymodes qoconv recognizes for conversion.
 var SupportedKeyModes = []int{4, 7}
 
-// Load opens a Quaver skin (.qs/.osk/.zip archive or an unpacked folder) and
-// parses its skin.ini. If the skin is wrapped in a sub-folder, paths are
-// rebased so callers always address files relative to the skin root.
-func Load(path string) (*Skin, error) {
+// OpenSource opens a skin (.qs/.osk/.zip archive or an unpacked folder) for
+// reading. If the skin is wrapped in a sub-folder, paths are rebased so callers
+// always address files relative to the skin root. The source is game-agnostic:
+// both Quaver and osu! skins ship as a folder-or-zip with a root skin.ini.
+func OpenSource(path string) (Source, error) {
 	src, err := openSource(path)
 	if err != nil {
 		return nil, fmt.Errorf("open skin %q: %w", path, err)
@@ -20,6 +21,21 @@ func Load(path string) (*Skin, error) {
 	if prefix, ok := skinIniPrefix(src); ok && prefix != "" {
 		src = prefixSource{Source: src, prefix: prefix}
 	}
+	return src, nil
+}
+
+// Load opens a Quaver skin (.qs/.zip archive or an unpacked folder) and parses
+// its skin.ini.
+func Load(path string) (*Skin, error) {
+	src, err := OpenSource(path)
+	if err != nil {
+		return nil, err
+	}
+	return FromSource(src)
+}
+
+// FromSource parses the skin.ini of an already-opened Quaver skin source.
+func FromSource(src Source) (*Skin, error) {
 	ini, err := src.ReadFile("skin.ini")
 	if err != nil {
 		return nil, fmt.Errorf("read skin.ini (is this a Quaver skin?): %w", err)
