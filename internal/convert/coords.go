@@ -1,5 +1,6 @@
-// Package convert turns a parsed Quaver skin into an osu!mania skin: coordinate
-// math, config-key mapping, asset mapping, and the conversion report.
+// Package convert converts between Quaver and osu!mania skins — Convert for
+// Quaver -> osu!, Reverse for osu! -> Quaver: coordinate math, config-key
+// mapping, asset mapping, and the conversion report.
 package convert
 
 import "math"
@@ -20,6 +21,22 @@ func ColumnWidthF(columnSize int) float64 { return float64(columnSize) / R }
 
 // ColumnSpacingF: gist StageReceptorPadding = round(ColumnSpacing * R).
 func ColumnSpacingF(stageReceptorPadding int) float64 { return float64(stageReceptorPadding) / R }
+
+// Quaver anchors both the combo display and the judgement burst centre-on-
+// screen-centre plus a Y offset (GameplayPlayfieldKeysStage: Alignment
+// MidCenter, Y = ComboPosY / JudgementBurstPosY); osu! draws both centre-
+// anchored at N×1.6 from the top of the 768-tall space (confirmed from
+// ManiaLegacySkinTransformer and LegacyManiaJudgementPiece). So the exact
+// mapping for both is N = (offset + 384) / R, which is what the gist-inverse
+// formulas below reduce to.
+//
+// When a skin.ini omits these keys Quaver falls back to the selected default
+// skin's values — Bar, Arrow, and Circle all ship ComboPosY -40 and
+// JudgementBurstPosY 108 — so absence means these values, not 0.
+const (
+	quaverDefaultComboPosY          = -40
+	quaverDefaultJudgementBurstPosY = 108
+)
 
 // ComboPosition: gist ComboPosY = round(R*(ComboPosition-480) + 768/2).
 func ComboPosition(comboPosY int) int { return roundI((float64(comboPosY)-384.0)/R + 480.0) }
@@ -81,6 +98,54 @@ func ReceptorBottomPad(receptorPosOffsetY int) int {
 		return 0
 	}
 	return receptorPosOffsetY
+}
+
+// --- reverse direction (osu! -> Quaver) ---
+//
+// These are the gist's formulas applied FORWARD (osu! value in, Quaver value
+// out); the functions above are their inverses.
+
+// QuaverColumnSize: gist ColumnSize = round(ColumnWidth * R).
+func QuaverColumnSize(columnWidth int) int { return roundI(float64(columnWidth) * R) }
+
+// QuaverStageReceptorPadding: gist StageReceptorPadding = round(ColumnSpacing * R).
+func QuaverStageReceptorPadding(columnSpacing int) int {
+	return roundI(float64(columnSpacing) * R)
+}
+
+// QuaverComboPosY: gist ComboPosY = round(R*(ComboPosition-480) + 768/2).
+func QuaverComboPosY(comboPosition int) int {
+	return roundI(R*(float64(comboPosition)-480.0) + 384.0)
+}
+
+// QuaverJudgementBurstPosY: gist JudgementBurstPosY = round(R*(ScorePosition-480) + 384).
+func QuaverJudgementBurstPosY(scorePosition int) int {
+	return roundI(R*(float64(scorePosition)-480.0) + 384.0)
+}
+
+// QuaverHitPosOffsetY inverts HitPosition. The converted receptor is written
+// with ReceptorPosOffsetY 0, so Quaver's hit line sits at
+// 768 - receptorDrawnH + HitPosOffsetY; equate with the osu! line at
+// HitPosition*R from the top. receptorDrawnH is the height Quaver will draw
+// the receptor at (the written image's pixel height, since it is written
+// ColumnSize wide).
+func QuaverHitPosOffsetY(hitPosition, receptorDrawnH int) int {
+	return roundI(float64(hitPosition)*R - 768.0 + float64(receptorDrawnH))
+}
+
+// QuaverColumnAlignment is the gist formula ColumnStart inverts:
+//
+//	ColumnAlignment = round( A * ( (-2*ColumnStart)/D - 1 ) )
+//	A = (1366 - ColumnSize*keys)/2 ; D = ColumnWidth*keys - (16/9*480)
+//
+// D is never 0 for integer widths (16/9*480 is not an integer multiple).
+func QuaverColumnAlignment(columnStart, columnWidth, columnSize, keys int) int {
+	a := (1366.0 - float64(columnSize*keys)) / 2.0
+	d := float64(columnWidth*keys) - osuPlayfieldWidth16x9
+	if a == 0 {
+		return 0 // stage fills the width; alignment is indeterminate
+	}
+	return roundI(a * ((-2.0*float64(columnStart))/d - 1.0))
 }
 
 // ColumnStart inverts the gist ColumnAlignment formula:

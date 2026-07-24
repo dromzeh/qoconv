@@ -75,8 +75,8 @@ func buildMania(cfg *quaver.Section, keys, hitPosition int) *osu.Mania {
 	}
 	kv.SetInt("HitPosition", hitPosition)
 	kv.SetInt("LightPosition", hitPosition) // the stage light flashes at the hit line
-	kv.SetInt("ScorePosition", ScorePosition(cfg.Int("JudgementBurstPosY", 0)))
-	kv.SetInt("ComboPosition", ComboPosition(cfg.Int("ComboPosY", 0)))
+	kv.SetInt("ScorePosition", ScorePosition(cfg.Int("JudgementBurstPosY", quaverDefaultJudgementBurstPosY)))
+	kv.SetInt("ComboPosition", ComboPosition(cfg.Int("ComboPosY", quaverDefaultComboPosY)))
 
 	// Quaver stretches LN bodies between head and tail; osu!'s default on modern
 	// skin versions tiles the texture instead. 0 = stretch.
@@ -95,6 +95,10 @@ func buildMania(cfg *quaver.Section, keys, hitPosition int) *osu.Mania {
 	}
 	// Quaver has no vertical column-divider lines; hide osu!'s (default white).
 	kv.Set("ColourColumnLine", "0,0,0,0")
+	// osu! tints the combo counter with ColourHold (default orange 255,191,51)
+	// while a hold note is pressed; Quaver's combo display never changes colour,
+	// so pin the hold colour to the counter's normal white.
+	kv.Set("ColourHold", "255,255,255,255")
 	for i := 1; i <= keys; i++ {
 		if c, ok := cfg.Color(fmt.Sprintf("ColumnColor%d", i)); ok {
 			kv.Set(fmt.Sprintf("ColourLight%d", i), c.String())

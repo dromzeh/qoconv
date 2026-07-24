@@ -14,6 +14,7 @@ type Report struct {
 	Suppressed []string // osu! defaults blanked because Quaver lacks them
 	Positions  []string // per-keymode computed-position summary
 	Warnings   []string // calibration caveats
+	ToQuaver   bool     // reverse (osu! -> Quaver) run; adjusts wording
 }
 
 func (r *Report) converted(format string, a ...any) {
@@ -46,7 +47,11 @@ func (r *Report) String() string {
 		fmt.Fprintf(&b, "  %s\n", p)
 	}
 	if len(r.Positions) > 0 {
-		b.WriteString("  └─ computed from the skin; fine-tune with --hit-position\n")
+		if r.ToQuaver {
+			b.WriteString("  └─ computed from the skin; fine-tune the [nK] values in skin.ini\n")
+		} else {
+			b.WriteString("  └─ computed from the skin; fine-tune with --hit-position\n")
+		}
 	}
 
 	if len(r.Suppressed) > 0 {
@@ -58,7 +63,11 @@ func (r *Report) String() string {
 		fmt.Fprintf(&b, "\nSkipped (no osu!mania equivalent):\n  %s\n", strings.Join(d, ", "))
 	}
 	if len(r.Missing) > 0 {
-		fmt.Fprintf(&b, "\n%d optional element(s) absent — osu! will use its defaults.\n", len(r.Missing))
+		game := "osu!"
+		if r.ToQuaver {
+			game = "Quaver"
+		}
+		fmt.Fprintf(&b, "\n%d optional element(s) absent — %s will use its defaults.\n", len(r.Missing), game)
 	}
 	for _, w := range r.Warnings {
 		fmt.Fprintf(&b, "\n! %s\n", w)

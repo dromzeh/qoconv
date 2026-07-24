@@ -1,4 +1,6 @@
-// Command qoconv converts a Quaver skin (.qs or folder) into an osu!mania skin.
+// Command qoconv converts a Quaver skin (.qs or folder) into an osu!mania
+// skin, or an osu!mania skin (.osk or folder) into a Quaver skin. The
+// direction is auto-detected from the input's skin.ini.
 //
 // Non-interactive:  qoconv --input skin.qs --output ./skins
 // Interactive TUI:  qoconv            (prompts for input/output/name/author)
@@ -44,18 +46,18 @@ func main() {
 
 func parseFlags() config {
 	var c config
-	flag.StringVar(&c.input, "input", "", "Quaver skin (.qs file or folder). Omit to use the interactive TUI.")
-	flag.StringVar(&c.output, "output", defaultOutputDir(), "Output directory (parent of the generated osu! skin).")
-	flag.StringVar(&c.name, "name", "", "Override skin name (default: from the Quaver skin.ini).")
-	flag.StringVar(&c.author, "author", "", "Override author (default: from the Quaver skin.ini).")
+	flag.StringVar(&c.input, "input", "", "Skin to convert: Quaver .qs or osu! .osk file, or an unpacked skin folder (direction is auto-detected). Omit to use the interactive TUI.")
+	flag.StringVar(&c.output, "output", defaultOutputDir(), "Output directory (parent of the generated skin).")
+	flag.StringVar(&c.name, "name", "", "Override skin name (default: from the input skin.ini).")
+	flag.StringVar(&c.author, "author", "", "Override author (default: from the input skin.ini).")
 	flag.StringVar(&c.keymodes, "keymodes", "", "Comma list e.g. 4k,7k (default: all detected).")
-	flag.BoolVar(&c.osk, "osk", true, "Also produce an importable .osk archive.")
-	flag.BoolVar(&c.grades, "grades", true, "Map letter grades to osu! ranking-* images.")
-	flag.BoolVar(&c.hitsounds, "hitsounds", true, "Map Quaver SFX to osu! hitsounds.")
+	flag.BoolVar(&c.osk, "osk", true, "Also produce an importable archive (.osk, or .qs when converting to Quaver).")
+	flag.BoolVar(&c.grades, "grades", true, "Map letter grades between ranking-* and grade-small-* images.")
+	flag.BoolVar(&c.hitsounds, "hitsounds", true, "Map hitsounds between Quaver SFX and osu! normal-hit*.")
 	flag.BoolVar(&c.quiet, "quiet", false, "Suppress the conversion report.")
-	flag.BoolVar(&c.rotateCW, "health-rotate-cw", true, "Rotate health bars clockwise (try false if upside-down).")
-	flag.BoolVar(&c.open, "open", false, "Install in osu! when done by opening the .osk (implies a .osk is made).")
-	flag.IntVar(&c.hitPosition, "hit-position", -1, "Override osu! HitPosition 0-480 (default: auto; higher = lower on screen).")
+	flag.BoolVar(&c.rotateCW, "health-rotate-cw", true, "Health-bar rotation direction (try false if upside-down).")
+	flag.BoolVar(&c.open, "open", false, "Install the converted skin when done by opening the archive (implies one is made).")
+	flag.IntVar(&c.hitPosition, "hit-position", -1, "Override osu! HitPosition 0-480 (Quaver -> osu! only; default: auto).")
 	showVersion := flag.Bool("version", false, "Print version and exit.")
 	flag.Parse()
 	if *showVersion {
@@ -68,25 +70,41 @@ func parseFlags() config {
 
 func run(c config) error {
 	if c.interactive {
-		p, err := tui.Gather(c.output, func(input string) (string, string, error) {
-			sk, err := quaver.Load(input)
-			if err != nil {
-				return "", "", err
-			}
-			g := sk.General()
-			return g.Str("Name", "Converted Skin"), g.Str("Author", "Unknown"), nil
-		})
+		p, err := tui.Gather(c.output, probeSkin)
 		if err != nil {
 			return err
 		}
 		c.input, c.output = p.Input, p.Output
-		c.name, c.author, c.osk, c.open = p.Name, p.Author, p.OSK, p.OpenInOsu
+		c.name, c.author, c.osk, c.open = p.Name, p.Author, p.Archive, p.Install
 	}
 	return execute(c)
 }
 
+// probeSkin opens the input just far enough to pre-fill the TUI: the skin's
+// name/author and which direction the conversion will run.
+func probeSkin(input string) (tui.SkinInfo, error) {
+	src, err := quaver.OpenSource(input)
+	if err != nil {
+		return tui.SkinInfo{}, err
+	}
+	if convert.IsOsuSkin(src) {
+		data, err := src.ReadFile("skin.ini")
+		if err != nil {
+			return tui.SkinInfo{}, err
+		}
+		g := osu.ParseSkinIni(data).General
+		return tui.SkinInfo{Name: g.Str("Name", "Converted Skin"), Author: g.Str("Author", "Unknown"), ToQuaver: true}, nil
+	}
+	sk, err := quaver.FromSource(src)
+	if err != nil {
+		return tui.SkinInfo{}, err
+	}
+	g := sk.General()
+	return tui.SkinInfo{Name: g.Str("Name", "Converted Skin"), Author: g.Str("Author", "Unknown")}, nil
+}
+
 func execute(c config) error {
-	sk, err := quaver.Load(c.input)
+	src, err := quaver.OpenSource(c.input)
 	if err != nil {
 		return err
 	}
@@ -103,46 +121,63 @@ func execute(c config) error {
 		opts.KeyModes = modes
 	}
 
+	if convert.IsOsuSkin(src) {
+		res, err := convert.Reverse(src, opts)
+		if err != nil {
+			return err
+		}
+		return writeResult(c, res.Name, res.Modes, res.Output.Files, res.Report, ".qs", "Quaver")
+	}
+
+	sk, err := quaver.FromSource(src)
+	if err != nil {
+		return err
+	}
 	res, err := convert.Convert(sk, opts)
 	if err != nil {
 		return err
 	}
+	return writeResult(c, skinName(res), res.Modes, res.Output.Files, res.Report, ".osk", "osu!")
+}
 
-	// Installing in osu! works by opening the .osk, so make one when --open is set.
+// writeResult writes the converted skin folder and (optionally) its archive,
+// prints the report, and opens the archive to install it when requested.
+func writeResult(c config, name string, modes []int, files map[string][]byte, rep *convert.Report, ext, game string) error {
+	// Installing works by opening the archive, so make one when --open is set.
 	if c.open {
 		c.osk = true
 	}
 
-	folderName := sanitize(skinName(res))
+	folderName := sanitize(name)
 	if err := os.MkdirAll(c.output, 0o755); err != nil {
 		return err
 	}
 	folder := filepath.Join(c.output, folderName)
-	if err := osu.WriteFolder(folder, res.Output.Files); err != nil {
+	if err := osu.WriteFolder(folder, files); err != nil {
 		return fmt.Errorf("write skin folder: %w", err)
 	}
 	fmt.Printf("Wrote skin folder: %s\n", folder)
 
-	oskPath := ""
+	archivePath := ""
 	if c.osk {
-		oskPath = filepath.Join(c.output, folderName+".osk")
-		if err := osu.WriteOSK(oskPath, res.Output.Files); err != nil {
-			return fmt.Errorf("write .osk: %w", err)
+		archivePath = filepath.Join(c.output, folderName+ext)
+		if err := osu.WriteOSK(archivePath, files); err != nil {
+			return fmt.Errorf("write %s: %w", ext, err)
 		}
-		fmt.Printf("Wrote .osk file:    %s\n", oskPath)
+		fmt.Printf("Wrote %s file:    %s\n", ext, archivePath)
 	}
-	fmt.Printf("Keymodes: %s, files: %d\n", joinModes(res.Modes), len(res.Output.Files))
+	fmt.Printf("Keymodes: %s, files: %d\n", joinModes(modes), len(files))
 
 	if !c.quiet {
 		fmt.Println()
-		fmt.Print(res.Report.String())
+		fmt.Print(rep.String())
 	}
 
-	if c.open && oskPath != "" {
-		if err := openWithOS(oskPath); err != nil {
-			fmt.Fprintf(os.Stderr, "could not install in osu!: %v\n", err)
+	if c.open && archivePath != "" {
+		if err := openWithOS(archivePath); err != nil {
+			fmt.Fprintf(os.Stderr, "could not install in %s: %v\n", game, err)
 		} else {
-			fmt.Println("\nOpening in osu! to install...")
+			fmt.Printf("\nOpening in %s to install...\n", game)
 		}
 	}
 	return nil

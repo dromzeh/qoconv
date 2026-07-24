@@ -43,6 +43,7 @@ func TestBuildMania(t *testing.T) {
 		"JudgementLine":           "0", // hide osu!'s default hit line
 		"ColourBarline":           "190,190,190",
 		"ColourLight1":            "0,0,0",
+		"ColourHold":              "255,255,255,255", // combo stays static during holds, as in Quaver
 	}
 	for k, v := range want {
 		got, ok := m.KV.Get(k)
@@ -57,6 +58,20 @@ func TestBuildMania(t *testing.T) {
 	// ColumnSpacing should be omitted when zero.
 	if _, ok := m.KV.Get("ColumnSpacing"); ok {
 		t.Error("ColumnSpacing should be omitted when 0")
+	}
+}
+
+// A skin.ini that omits ComboPosY/JudgementBurstPosY inherits Quaver's default
+// skin values (-40 / 108), not 0 — the converted positions must reflect that.
+func TestBuildManiaPositionDefaults(t *testing.T) {
+	sk := quaver.ParseString("[4K]\nColumnSize = 140\n")
+	m := buildMania(sk.KeyMode(4), 4, 450)
+
+	if got, _ := m.KV.Get("ComboPosition"); got != "215" { // (-40+384)/1.6
+		t.Errorf("ComboPosition = %q, want 215", got)
+	}
+	if got, _ := m.KV.Get("ScorePosition"); got != "308" { // (108+384)/1.6
+		t.Errorf("ScorePosition = %q, want 308", got)
 	}
 }
 
