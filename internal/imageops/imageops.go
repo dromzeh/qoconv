@@ -124,6 +124,29 @@ func ParseSheetName(filename string) (base string, rows, cols int, ok bool) {
 	return m[1], rows, cols, true
 }
 
+// JoinRow composes frames into a single-row spritesheet (Quaver's "@1xN"
+// convention). Cells are all sized to the largest frame so SplitGrid can slice
+// the sheet back evenly; smaller frames are centred in their cell.
+func JoinRow(frames []image.Image) image.Image {
+	cw, ch := 0, 0
+	for _, f := range frames {
+		if w := f.Bounds().Dx(); w > cw {
+			cw = w
+		}
+		if h := f.Bounds().Dy(); h > ch {
+			ch = h
+		}
+	}
+	dst := image.NewNRGBA(image.Rect(0, 0, cw*len(frames), ch))
+	for i, f := range frames {
+		b := f.Bounds()
+		x := i*cw + (cw-b.Dx())/2
+		y := (ch - b.Dy()) / 2
+		draw.Draw(dst, image.Rect(x, y, x+b.Dx(), y+b.Dy()), f, b.Min, draw.Src)
+	}
+	return dst
+}
+
 // SplitGrid slices src into rows*cols equal frames in row-major order.
 func SplitGrid(src image.Image, rows, cols int) []image.Image {
 	b := src.Bounds()

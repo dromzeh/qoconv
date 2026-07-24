@@ -38,7 +38,8 @@ func writeAll(dir string, files map[string][]byte) error {
 	return nil
 }
 
-// WriteOSK writes files into a .osk (ZIP) archive at path.
+// WriteOSK writes files into a skin ZIP archive (.osk, or .qs for Quaver
+// output) at path.
 func WriteOSK(path string, files map[string][]byte) (err error) {
 	f, err := os.Create(path)
 	if err != nil {

@@ -56,3 +56,35 @@ func TestCoordsGolden(t *testing.T) {
 		t.Errorf("ColumnSpacing = %d, want 0", got)
 	}
 }
+
+// Reverse (osu! -> Quaver) golden values, derived from the same representative
+// skin: the forward goldens above fed back through the gist's forward formulas.
+func TestReverseCoordsGolden(t *testing.T) {
+	if got := QuaverColumnSize(88); got != 141 { // 88 * 1.6 = 140.8
+		t.Errorf("QuaverColumnSize = %d, want 141", got)
+	}
+	if got := QuaverStageReceptorPadding(10); got != 16 {
+		t.Errorf("QuaverStageReceptorPadding = %d, want 16", got)
+	}
+	if got := QuaverComboPosY(215); got != -40 { // 1.6*(215-480)+384
+		t.Errorf("QuaverComboPosY = %d, want -40", got)
+	}
+	if got := QuaverJudgementBurstPosY(308); got != 109 { // 1.6*(308-480)+384 = 108.8
+		t.Errorf("QuaverJudgementBurstPosY = %d, want 109", got)
+	}
+	// Receptor drawn 224 tall with the line at 450*1.6=720 from the top:
+	// 720 - 768 + 224 = 176 — the HitPosOffsetY of the forward golden skin.
+	if got := QuaverHitPosOffsetY(450, 224); got != 176 {
+		t.Errorf("QuaverHitPosOffsetY = %d, want 176", got)
+	}
+	if got := QuaverColumnAlignment(252, 88, 141, 4); got != 2 { // ~0 up to rounding drift
+		t.Errorf("QuaverColumnAlignment = %d, want 2", got)
+	}
+
+	// The position mappings must round-trip exactly through the forward inverse.
+	for _, comboPosY := range []int{-120, -40, 0, 96} {
+		if got := QuaverComboPosY(ComboPosition(comboPosY)); got != comboPosY {
+			t.Errorf("ComboPosY round-trip: %d -> %d", comboPosY, got)
+		}
+	}
+}
