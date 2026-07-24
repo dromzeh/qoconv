@@ -43,6 +43,7 @@ func TestBuildMania(t *testing.T) {
 		"JudgementLine":           "0", // hide osu!'s default hit line
 		"ColourBarline":           "190,190,190",
 		"ColourLight1":            "0,0,0",
+		"ColourHold":              "255,255,255,255", // combo stays static during holds, as in Quaver
 	}
 	for k, v := range want {
 		got, ok := m.KV.Get(k)
