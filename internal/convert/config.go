@@ -75,8 +75,8 @@ func buildMania(cfg *quaver.Section, keys, hitPosition int) *osu.Mania {
 	}
 	kv.SetInt("HitPosition", hitPosition)
 	kv.SetInt("LightPosition", hitPosition) // the stage light flashes at the hit line
-	kv.SetInt("ScorePosition", ScorePosition(cfg.Int("JudgementBurstPosY", 0)))
-	kv.SetInt("ComboPosition", ComboPosition(cfg.Int("ComboPosY", 0)))
+	kv.SetInt("ScorePosition", ScorePosition(cfg.Int("JudgementBurstPosY", quaverDefaultJudgementBurstPosY)))
+	kv.SetInt("ComboPosition", ComboPosition(cfg.Int("ComboPosY", quaverDefaultComboPosY)))
 
 	// Quaver stretches LN bodies between head and tail; osu!'s default on modern
 	// skin versions tiles the texture instead. 0 = stretch.

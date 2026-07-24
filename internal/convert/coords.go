@@ -21,6 +21,22 @@ func ColumnWidthF(columnSize int) float64 { return float64(columnSize) / R }
 // ColumnSpacingF: gist StageReceptorPadding = round(ColumnSpacing * R).
 func ColumnSpacingF(stageReceptorPadding int) float64 { return float64(stageReceptorPadding) / R }
 
+// Quaver anchors both the combo display and the judgement burst centre-on-
+// screen-centre plus a Y offset (GameplayPlayfieldKeysStage: Alignment
+// MidCenter, Y = ComboPosY / JudgementBurstPosY); osu! draws both centre-
+// anchored at N×1.6 from the top of the 768-tall space (confirmed from
+// ManiaLegacySkinTransformer and LegacyManiaJudgementPiece). So the exact
+// mapping for both is N = (offset + 384) / R, which is what the gist-inverse
+// formulas below reduce to.
+//
+// When a skin.ini omits these keys Quaver falls back to the selected default
+// skin's values — Bar, Arrow, and Circle all ship ComboPosY -40 and
+// JudgementBurstPosY 108 — so absence means these values, not 0.
+const (
+	quaverDefaultComboPosY          = -40
+	quaverDefaultJudgementBurstPosY = 108
+)
+
 // ComboPosition: gist ComboPosY = round(R*(ComboPosition-480) + 768/2).
 func ComboPosition(comboPosY int) int { return roundI((float64(comboPosY)-384.0)/R + 480.0) }
 

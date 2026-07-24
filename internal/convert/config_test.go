@@ -61,6 +61,20 @@ func TestBuildMania(t *testing.T) {
 	}
 }
 
+// A skin.ini that omits ComboPosY/JudgementBurstPosY inherits Quaver's default
+// skin values (-40 / 108), not 0 — the converted positions must reflect that.
+func TestBuildManiaPositionDefaults(t *testing.T) {
+	sk := quaver.ParseString("[4K]\nColumnSize = 140\n")
+	m := buildMania(sk.KeyMode(4), 4, 450)
+
+	if got, _ := m.KV.Get("ComboPosition"); got != "215" { // (-40+384)/1.6
+		t.Errorf("ComboPosition = %q, want 215", got)
+	}
+	if got, _ := m.KV.Get("ScorePosition"); got != "308" { // (108+384)/1.6
+		t.Errorf("ScorePosition = %q, want 308", got)
+	}
+}
+
 func TestBuildGeneralOverride(t *testing.T) {
 	sk := quaver.ParseString(sample4K)
 	g := buildGeneral(sk, "Custom Name", "")
