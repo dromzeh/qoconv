@@ -18,7 +18,7 @@ NoteImage0: qo-note-1
 
 [Mania]
 Keys: 7
-HitPosition: 402
+HitPosition: 402        //the hit box position 0-500
 `
 
 func TestParseSkinIni(t *testing.T) {

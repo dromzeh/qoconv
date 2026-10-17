@@ -1,5 +1,9 @@
 name: Release
 
+# The GUI (Wails) needs CGO on macOS and Linux, so each OS builds natively.
+# Every archive's binary is both the app (no arguments) and the CLI (--input).
+# Linux also gets a static CLI-only build for machines without WebKitGTK.
+
 on:
   push:
     tags: ['v*']
@@ -7,20 +11,138 @@ on:
 permissions:
   contents: write
 
+env:
+  GO_VERSION: '1.26'
+
 jobs:
-  goreleaser:
-    runs-on: ubuntu-latest
+  windows:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
-      - uses: goreleaser/goreleaser-action@v6
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build
+        shell: bash
+        # -H windowsgui: double-clicking opens the app with no console flash;
+        # the CLI attaches to the terminal it's run from (cmd/qoconv/console_windows.go).
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          go run github.com/tc-hib/go-winres@v0.3.3 make --in cmd/qoconv/winres/winres.json \
+            --out cmd/qoconv/rsrc --arch amd64,arm64 --file-version "$v" --product-version "$v"
+          mkdir dist
+          # Bare .exe files: nothing to unzip, just download and run.
+          for arch in amd64 arm64; do
+            GOARCH=$arch CGO_ENABLED=0 go build -trimpath -tags production \
+              -ldflags "-s -w -H windowsgui -X main.version=$v" -o "dist/qoconv_${v}_windows_${arch}.exe" ./cmd/qoconv
+          done
+      - uses: actions/upload-artifact@v4
         with:
-          distribution: goreleaser
-          version: '~> v2'
-          args: release --clean
+          name: windows
+          path: dist/*
+
+  macos:
+    runs-on: macos-latest
+    env:
+      CGO_ENABLED: '1'
+      CGO_LDFLAGS: -framework UniformTypeIdentifiers
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build universal app bundle
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for arch in amd64 arm64; do
+            GOARCH=$arch go build -trimpath -tags production \
+              -ldflags "-s -w -X main.version=$v" -o "build/qoconv-$arch" ./cmd/qoconv
+          done
+          app=build/qoconv.app/Contents
+          mkdir -p "$app/MacOS" "$app/Resources"
+          lipo -create -output "$app/MacOS/qoconv" build/qoconv-amd64 build/qoconv-arm64
+
+          iconset=build/qoconv.iconset
+          mkdir -p "$iconset"
+          for s in 16 32 128 256 512; do
+            sips -z $s $s cmd/qoconv/winres/icon.png --out "$iconset/icon_${s}x${s}.png" >/dev/null
+            sips -z $((s*2)) $((s*2)) cmd/qoconv/winres/icon.png --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
+          done
+          iconutil -c icns "$iconset" -o "$app/Resources/qoconv.icns"
+
+          cat > "$app/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>qoconv</string>
+            <key>CFBundleDisplayName</key><string>qoconv</string>
+            <key>CFBundleIdentifier</key><string>dev.dromzeh.qoconv</string>
+            <key>CFBundleExecutable</key><string>qoconv</string>
+            <key>CFBundleIconFile</key><string>qoconv</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>$v</string>
+            <key>CFBundleVersion</key><string>$v</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          EOF
+          codesign --force --deep --sign - build/qoconv.app
+
+          mkdir dist
+          cp README.md LICENSE build/
+          (cd build && zip -qry "../dist/qoconv_${v}_macos_universal.zip" qoconv.app README.md LICENSE)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  linux:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Install GTK and WebKitGTK
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Build
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          ldflags="-s -w -X main.version=$v"
+          mkdir -p dist build/gui build/cli
+          CGO_ENABLED=1 go build -trimpath -tags production,webkit2_41 -ldflags "$ldflags" -o build/gui/qoconv ./cmd/qoconv
+          CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o build/cli/qoconv ./cmd/qoconv
+          for kind in gui cli; do
+            cp README.md LICENSE "build/$kind/"
+            name="qoconv_${v}_linux_${{ matrix.arch }}"
+            [ "$kind" = cli ] && name="${name}_cli"
+            tar -C "build/$kind" -czf "dist/$name.tar.gz" .
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          gh release create "$GITHUB_REF_NAME" * --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

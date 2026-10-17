@@ -51,6 +51,10 @@ type Section struct {
 	Name  string            // original-case header name
 	keys  map[string]string // lowercased key -> trimmed value
 	order []string          // lowercased keys in insertion order
+
+	// fallback answers lookups for keys this section doesn't set. Keymode
+	// sections fall back to Quaver's built-in default skin (see KeyModeConfig).
+	fallback *Section
 }
 
 func newSection(name string) *Section {
@@ -65,8 +69,23 @@ func (s *Section) set(key, val string) {
 	s.keys[lk] = val
 }
 
-// Get returns the raw value for key (case-insensitive) and whether it was set.
+// Get returns the raw value for key (case-insensitive) and whether it was
+// set, consulting the fallback section for keys this one lacks.
 func (s *Section) Get(key string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	if v, ok := s.Explicit(key); ok {
+		return v, true
+	}
+	return s.fallback.Get(key)
+}
+
+// Explicit is Get without the fallback: only what the skin.ini itself says.
+func (s *Section) Explicit(key string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
 	v, ok := s.keys[strings.ToLower(key)]
 	return v, ok
 }
@@ -92,6 +111,19 @@ func (s *Section) Int(key string, def int) int {
 	}
 	if f, err := strconv.ParseFloat(v, 64); err == nil {
 		return int(f)
+	}
+	return def
+}
+
+// Float returns the numeric value for key, or def if absent/unparseable.
+// Most Quaver layout keys are floats (e.g. "ColumnLightingScale = 1.5").
+func (s *Section) Float(key string, def float64) float64 {
+	v, ok := s.Get(key)
+	if !ok {
+		return def
+	}
+	if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+		return f
 	}
 	return def
 }
@@ -148,11 +180,16 @@ func (sk *Skin) KeyMode(n int) *Section {
 	return sk.Section(fmt.Sprintf("%dK", n))
 }
 
-// KeyModeOrEmpty is like KeyMode but returns an empty section (never nil) when
-// the skin provides mode assets but no [nK] config block.
-func (sk *Skin) KeyModeOrEmpty(n int) *Section {
-	if s := sk.KeyMode(n); s != nil {
-		return s
+// KeyModeConfig returns the [nK] section as Quaver resolves it: the skin's own
+// values, with every key it omits filled from the built-in default skin it
+// names (DefaultSkin = Bar/Arrow/Circle, Bar when unset). Never nil, even when
+// the skin has mode assets but no [nK] block.
+func (sk *Skin) KeyModeConfig(n int) *Section {
+	s := sk.KeyMode(n)
+	if s == nil {
+		s = newSection(fmt.Sprintf("%dK", n))
 	}
-	return newSection(fmt.Sprintf("%dK", n))
+	cp := *s
+	cp.fallback = defaultKeyMode(s.Str("DefaultSkin", ""), n)
+	return &cp
 }

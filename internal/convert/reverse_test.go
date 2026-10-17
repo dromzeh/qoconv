@@ -139,6 +139,11 @@ func TestReverseEndToEnd(t *testing.T) {
 		"JudgementBurstPosY = 109",        // 1.6*(308-480)+384, rounded
 		"ReceptorsOverHitObjects = False", // inverse of KeysUnderNotes 1
 		"TimingLineColor = 190,190,190,255",
+		"ColumnColor1 = 255,255,255", // osu!'s white default; Quaver would hide the light
+		"NotePadding = 0",
+		"JudgementHitBurstScale = 270", // the tallest settled judgement (the miss, at 1×)
+		"HitLightingScale = 141",       // no Version = 1.0: osu! draws lighting 1:1, i.e. 1/0.711 in Quaver
+		"ColumnLightingOffsetY = -117", // 768 - 224 - LightPosition 413 * 1.6
 	} {
 		if !strings.Contains(ini, want) {
 			t.Errorf("skin.ini missing %q\n---\n%s", want, ini)
@@ -183,6 +188,14 @@ func TestReverseEndToEnd(t *testing.T) {
 	// ColumnSize wide, own pixel height tall.
 	if w, h, err := imageops.Size(res.Output.Files["4k/Receptors/receptor-up-1.png"]); err != nil || w != 141 || h != 224 {
 		t.Errorf("receptor-up-1 size = %dx%d (err %v), want 141x224", w, h, err)
+	}
+	// Judgements share one height in Quaver, so hits (settling at 0.7× in osu!)
+	// are padded to 270/0.7 tall to keep their art at 0.7 of the miss's size.
+	if w, h, err := imageops.Size(res.Output.Files["Judgements/judge-marv.png"]); err != nil || w != 270 || h != 386 {
+		t.Errorf("judge-marv size = %dx%d (err %v), want 270x386", w, h, err)
+	}
+	if w, h, err := imageops.Size(res.Output.Files["Judgements/judge-miss.png"]); err != nil || w != 270 || h != 270 {
+		t.Errorf("judge-miss size = %dx%d (err %v), want 270x270", w, h, err)
 	}
 	// Lighting sheet: two 50x50 frames side by side.
 	if w, h, err := imageops.Size(res.Output.Files["4k/Lighting/hitlighting@1x2.png"]); err != nil || w != 100 || h != 50 {

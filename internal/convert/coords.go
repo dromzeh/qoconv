@@ -3,165 +3,237 @@
 // mapping, asset mapping, and the conversion report.
 package convert
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
-// R is the Quaver (768-height) ÷ osu! (480-height) vertical ratio. The reference
-// gist documents osu!→Quaver formulas; every function here is the INVERSE
-// (Quaver value in, osu! value out). See the plan's coordinate-math table.
-const R = 768.0 / 480.0
-
-// osuPlayfieldWidth16x9 is the horizontal extent of the osu! 480-height space at
-// 16:9 (= 16/9 * 480), used by the ColumnAlignment/ColumnStart conversion.
-const osuPlayfieldWidth16x9 = 16.0 / 9.0 * 480.0
+// The three coordinate spaces involved:
+//
+//   - osu! skin.ini positions are in a 480-tall space; osu! multiplies them by
+//     1.6 into its 768-tall drawing space (LegacyManiaSkinDecoder), and draws
+//     skin textures 1 pixel = 1 unit in that 768 space.
+//   - Quaver's [FixedScale] float keys (ColumnSize, HitPosOffsetY, ComboPosY,
+//     JudgementHitBurstScale, …) are written in a 1366×768 space: Quaver
+//     multiplies them by 1920/1366 into its 1920×1080 virtual screen. So they
+//     share osu!'s 768 units.
+//   - Quaver draws raw texture pixels, and int keys that FixedScale skips
+//     (WidthForNoteHeightScale, HitLightingScale), in 1080 units: one of them
+//     is 768/1080 of a 768 unit.
+const (
+	// R converts osu!'s 480 space to the shared 768 space.
+	R = 768.0 / 480.0
+	// quaverPixel is the size of one Quaver 1080-space unit in 768 units.
+	quaverPixel = 768.0 / 1080.0
+	// osuWidth is the width of osu!'s 480-tall space at 16:9.
+	osuWidth = 16.0 / 9.0 * 480.0
+	// quaverWidth is the width of the shared 768-tall space at 16:9.
+	quaverWidth = 16.0 / 9.0 * 768.0
+)
 
 func roundI(f float64) int { return int(math.Round(f)) }
 
-// ColumnWidthF: gist ColumnSize = round(ColumnWidth * R)  =>  ColumnWidth = ColumnSize / R.
-func ColumnWidthF(columnSize int) float64 { return float64(columnSize) / R }
+// --- forward (Quaver -> osu!) ---
 
-// ColumnSpacingF: gist StageReceptorPadding = round(ColumnSpacing * R).
-func ColumnSpacingF(stageReceptorPadding int) float64 { return float64(stageReceptorPadding) / R }
+// ColumnWidthF: Quaver draws each lane ColumnSize wide (768 units).
+func ColumnWidthF(columnSize float64) float64 { return columnSize / R }
+
+// ColumnSpacingF: Quaver's gap between lanes is NotePadding (GameplayPlayfieldKeys
+// ReceptorPadding); StageReceptorPadding is the stage's outer margin instead.
+func ColumnSpacingF(notePadding float64) float64 { return notePadding / R }
+
+// ColumnStart is the left edge of the first column. Quaver centres the stage
+// on the screen and shifts it by ColumnAlignment (Alignment TopCenter, X =
+// ColumnAlignment); StageReceptorPadding pads both sides equally, so it moves
+// the borders but not the columns. columnWidth and spacing are the (rounded)
+// osu! values, so the stage osu! actually draws is the one that gets centred.
+func ColumnStart(columnAlignment float64, columnWidth, spacing, keys int) int {
+	stage := float64(columnWidth*keys + spacing*(keys-1))
+	return roundI(osuWidth/2 + columnAlignment/R - stage/2)
+}
 
 // Quaver anchors both the combo display and the judgement burst centre-on-
-// screen-centre plus a Y offset (GameplayPlayfieldKeysStage: Alignment
-// MidCenter, Y = ComboPosY / JudgementBurstPosY); osu! draws both centre-
-// anchored at N×1.6 from the top of the 768-tall space (confirmed from
-// ManiaLegacySkinTransformer and LegacyManiaJudgementPiece). So the exact
-// mapping for both is N = (offset + 384) / R, which is what the gist-inverse
-// formulas below reduce to.
-//
-// When a skin.ini omits these keys Quaver falls back to the selected default
-// skin's values — Bar, Arrow, and Circle all ship ComboPosY -40 and
-// JudgementBurstPosY 108 — so absence means these values, not 0.
+// screen-centre plus a Y offset (Alignment MidCenter, Y = ComboPosY /
+// JudgementBurstPosY); osu! draws both centred at N×1.6 from the top of the
+// 768-tall space (ManiaLegacySkinTransformer, LegacyManiaJudgementPiece). So
+// N = (offset + 384) / R.
+
+// ComboPosition maps Quaver ComboPosY to osu! ComboPosition.
+func ComboPosition(comboPosY float64) int { return roundI((comboPosY + 384) / R) }
+
+// ScorePosition maps Quaver JudgementBurstPosY to osu! ScorePosition (osu!
+// draws judgements there).
+func ScorePosition(judgementBurstPosY float64) int { return roundI((judgementBurstPosY + 384) / R) }
+
+// ClampHitPosition applies osu!'s own clamp of the skin.ini HitPosition value
+// (LegacyManiaSkinDecoder).
+func ClampHitPosition[T ~int | ~float64](v T) T { return min(max(v, 240), 480) }
+
+// osu!mania's stock values, used when the receptor size is unknown.
 const (
-	quaverDefaultComboPosY          = -40
-	quaverDefaultJudgementBurstPosY = 108
+	OsuDefaultHitPosition   = 402
+	OsuDefaultLightPosition = 413
 )
 
-// ComboPosition: gist ComboPosY = round(R*(ComboPosition-480) + 768/2).
-func ComboPosition(comboPosY int) int { return roundI((float64(comboPosY)-384.0)/R + 480.0) }
+// osu!mania's defaults for the [Mania] layout keys (LegacyManiaSkinConfiguration).
+const (
+	OsuDefaultColumnWidth = 30
+	OsuDefaultColumnStart = 136
+)
 
-// ScorePosition: gist JudgementBurstPosY = round(R*(ScorePosition-480) + 384).
-func ScorePosition(judgementBurstPosY int) int {
-	return roundI((float64(judgementBurstPosY)-384.0)/R + 480.0)
+// ReceptorUpPath is the Quaver path of a keymode's released receptor for col
+// (1-based). Quaver sizes each lane's receptor sprite from this texture, and
+// the first lane's places the hit line.
+func ReceptorUpPath(keys, col int) string {
+	return fmt.Sprintf("%dk/Receptors/receptor-up-%d.png", keys, col)
 }
 
-// clampHitPosition matches osu!'s own clamp of the skin.ini HitPosition value.
-func clampHitPosition(v int) int {
-	switch {
-	case v < 240:
-		return 240
-	case v > 480:
-		return 480
-	default:
-		return v
-	}
+// QuaverReceptor is one keymode's Quaver receptor placement (768 units, except
+// the texture size). Quaver draws receptor-up ColumnSize wide, aspect-scaled
+// tall, with its bottom edge ReceptorPosOffsetY above the screen bottom
+// (GameplayPlayfieldKeys.SetReferencePositions).
+type QuaverReceptor struct {
+	ColumnSize, ReceptorPosOffsetY float64
+	TexW, TexH                     int // receptor-up pixel size; 0 when unknown
 }
 
-// OsuDefaultHitPosition is osu!mania's stock judgement-line height.
-const OsuDefaultHitPosition = 402
+// Known reports whether the receptor's drawn size can be worked out.
+func (r QuaverReceptor) Known() bool { return r.ColumnSize > 0 && r.TexW > 0 && r.TexH > 0 }
 
-// HitPosition is the osu! judgement line, as a distance from the TOP of the
-// 480-tall playfield — confirmed from osu! source (LegacyManiaSkinDecoder:
-// stored as (480 − clamp(N,240,480)) × 1.6, applied as bottom-padding). At hit
-// time osu! lands the note's BOTTOM edge on this line (DrawableManiaHitObject /
-// LegacyNotePiece anchor BottomCentre in downscroll); the same holds for LN
-// heads and tails at their start/end times.
-//
-// Quaver's equivalent line (GameplayPlayfieldKeys.SetReferencePositions) is
-// where the note's bottom edge sits at hit time:
-//
-//	HitLineY = ReceptorTopY + HitPosOffsetY
-//	         = 768 − ReceptorPosOffsetY − receptorH×ColumnSize/receptorW + HitPosOffsetY
-//
-// (the receptor is drawn ColumnSize wide, aspect-scaled tall, with its bottom
-// ReceptorPosOffsetY up from the screen bottom). ÷1.6 maps it into 480 space.
-// e.g. ColumnSize 140, 250x400 receptor, HitPosOffsetY 176 -> 450. Falls back
-// to osu!'s default when the receptor size is unknown.
-func HitPosition(receptorPosOffsetY, hitPosOffsetY, columnSize, receptorW, receptorH int) int {
-	if columnSize <= 0 || receptorW <= 0 {
-		return OsuDefaultHitPosition
-	}
-	receptorScaledH := float64(receptorH) * float64(columnSize) / float64(receptorW)
-	lineFromTop := 768.0 - float64(receptorPosOffsetY) - receptorScaledH + float64(hitPosOffsetY)
-	return clampHitPosition(roundI(lineFromTop / R))
-}
-
-// ReceptorBottomPad returns the transparent padding (in source pixels) to add
-// BELOW a receptor image. osu! bottom-anchors key images to the screen and
-// draws them at native pixel height (px map 1:1 into its 768-tall space),
-// ignoring HitPosition entirely — which matches Quaver, where the receptor's
-// bottom edge sits ReceptorPosOffsetY above the screen bottom. So the pad is
-// simply ReceptorPosOffsetY (never negative).
-func ReceptorBottomPad(receptorPosOffsetY int) int {
-	if receptorPosOffsetY < 0 {
+// Height is the receptor's drawn height, or 0 without a texture.
+func (r QuaverReceptor) Height() float64 {
+	if r.TexW <= 0 {
 		return 0
 	}
-	return receptorPosOffsetY
+	return float64(r.TexH) * r.ColumnSize / float64(r.TexW)
 }
 
-// --- reverse direction (osu! -> Quaver) ---
-//
-// These are the gist's formulas applied FORWARD (osu! value in, Quaver value
-// out); the functions above are their inverses.
+// Top is the receptor's top edge, measured from the top of the screen. Quaver
+// hangs both the hit line (HitPosOffsetY) and the column light
+// (ColumnLightingOffsetY) off it.
+func (r QuaverReceptor) Top() float64 { return 768 - r.ReceptorPosOffsetY - r.Height() }
 
-// QuaverColumnSize: gist ColumnSize = round(ColumnWidth * R).
-func QuaverColumnSize(columnWidth int) int { return roundI(float64(columnWidth) * R) }
-
-// QuaverStageReceptorPadding: gist StageReceptorPadding = round(ColumnSpacing * R).
-func QuaverStageReceptorPadding(columnSpacing int) int {
-	return roundI(float64(columnSpacing) * R)
+// QuaverStage is one keymode's Quaver lane layout (768 units). Quaver centres
+// the stage on the screen and shifts it by ColumnAlignment (Alignment
+// TopCenter); lanes are ColumnSize wide with NotePadding between them, and
+// StageReceptorPadding widens the stage on both sides (GameplayPlayfieldKeys).
+type QuaverStage struct {
+	Keys                 int
+	ColumnSize           float64
+	NotePadding          float64
+	StageReceptorPadding float64
+	ColumnAlignment      float64
 }
 
-// QuaverComboPosY: gist ComboPosY = round(R*(ComboPosition-480) + 768/2).
-func QuaverComboPosY(comboPosition int) int {
-	return roundI(R*(float64(comboPosition)-480.0) + 384.0)
+// Width is the whole stage's width, padding included.
+func (s QuaverStage) Width() float64 {
+	return (s.ColumnSize+s.NotePadding)*float64(s.Keys) - s.NotePadding + 2*s.StageReceptorPadding
 }
 
-// QuaverJudgementBurstPosY: gist JudgementBurstPosY = round(R*(ScorePosition-480) + 384).
-func QuaverJudgementBurstPosY(scorePosition int) int {
-	return roundI(R*(float64(scorePosition)-480.0) + 384.0)
+// Left is the stage's left edge, padding included.
+func (s QuaverStage) Left() float64 { return quaverWidth/2 + s.ColumnAlignment - s.Width()/2 }
+
+// ColumnX is the left edge of lane i (0-based).
+func (s QuaverStage) ColumnX(i int) float64 {
+	return s.Left() + s.StageReceptorPadding + float64(i)*(s.ColumnSize+s.NotePadding)
 }
+
+// HitPosition is the osu! judgement line, as a distance from the TOP of the
+// 480-tall playfield (LegacyManiaSkinDecoder stores (480 − clamp(N,240,480)) ×
+// 1.6 as bottom padding). At hit time osu! lands the note's BOTTOM edge on it.
+// Quaver lands a note's bottom edge on receptor top + HitPosOffsetY.
+// e.g. ColumnSize 140, 250x400 receptor, HitPosOffsetY 176 -> 450.
+func HitPosition(r QuaverReceptor, hitPosOffsetY float64) int {
+	if !r.Known() {
+		return OsuDefaultHitPosition
+	}
+	return ClampHitPosition(roundI((r.Top() + hitPosOffsetY) / R))
+}
+
+// LightPosition is where osu! puts the bottom of the column light (480 space,
+// from the top; unclamped). Quaver draws its column lighting with the bottom
+// ColumnLightingOffsetY above the receptor top, not on the hit line.
+func LightPosition(r QuaverReceptor, lightingOffsetY float64) int {
+	if !r.Known() {
+		return OsuDefaultLightPosition
+	}
+	return roundI((r.Top() - lightingOffsetY) / R)
+}
+
+// ReceptorBottomPad returns the transparent padding (in output pixels) to add
+// BELOW a receptor image. osu! bottom-anchors key images to the screen and
+// draws them at native pixel height, ignoring HitPosition; Quaver lifts the
+// receptor ReceptorPosOffsetY off the screen bottom. Never negative.
+func ReceptorBottomPad(receptorPosOffsetY float64) int { return max(roundI(receptorPosOffsetY), 0) }
+
+// NoteHeightScale maps Quaver WidthForNoteHeightScale to osu!'s. Quaver's is
+// an int, which FixScale leaves in 1080 units; osu! multiplies its own by 1.6.
+func NoteHeightScale(widthForNoteHeightScale int) int {
+	return roundI(QuaverPixels(float64(widthForNoteHeightScale)) / R)
+}
+
+// QuaverPixels converts a length in Quaver's 1080 units (raw texture pixels,
+// and the int keys FixedScale skips, such as WidthForNoteHeightScale) to 768
+// units.
+func QuaverPixels(v float64) float64 { return v * quaverPixel }
+
+// LightingWidth maps Quaver Hit/HoldLightingScale (a percentage of the texture's
+// 1080-space size) to osu! LightingNWidth/LightingLWidth, which scale the
+// texture by width/30 (LegacySkin ExplosionScale).
+func LightingWidth(lightingScale int) float64 {
+	return 30 * lightingPixel(lightingScale)
+}
+
+// lightingPixel is the drawn size, in 768 units, of one hit-lighting texture
+// pixel in Quaver.
+func lightingPixel(lightingScale int) float64 { return QuaverPixels(float64(lightingScale)) / 100 }
+
+// --- reverse (osu! -> Quaver) ---
+
+// QuaverColumnSize maps osu! ColumnWidth to Quaver ColumnSize.
+func QuaverColumnSize(columnWidth float64) float64 { return columnWidth * R }
+
+// QuaverNotePadding maps osu! ColumnSpacing to Quaver NotePadding.
+func QuaverNotePadding(columnSpacing float64) float64 { return columnSpacing * R }
+
+// QuaverColumnAlignment inverts ColumnStart: the offset of the osu! stage's
+// centre from the screen centre.
+func QuaverColumnAlignment(columnStart, columnWidth, spacing float64, keys int) float64 {
+	stage := columnWidth*float64(keys) + spacing*float64(keys-1)
+	return (columnStart + stage/2 - osuWidth/2) * R
+}
+
+// QuaverComboPosY inverts ComboPosition.
+func QuaverComboPosY(comboPosition float64) float64 { return comboPosition*R - 384 }
+
+// QuaverJudgementBurstPosY inverts ScorePosition.
+func QuaverJudgementBurstPosY(scorePosition float64) float64 { return scorePosition*R - 384 }
 
 // QuaverHitPosOffsetY inverts HitPosition. The converted receptor is written
-// with ReceptorPosOffsetY 0, so Quaver's hit line sits at
-// 768 - receptorDrawnH + HitPosOffsetY; equate with the osu! line at
-// HitPosition*R from the top. receptorDrawnH is the height Quaver will draw
-// the receptor at (the written image's pixel height, since it is written
-// ColumnSize wide).
-func QuaverHitPosOffsetY(hitPosition, receptorDrawnH int) int {
-	return roundI(float64(hitPosition)*R - 768.0 + float64(receptorDrawnH))
+// with ReceptorPosOffsetY 0 and is receptorH tall as Quaver draws it, so its
+// top sits at 768 - receptorH; the hit line must land at HitPosition*R.
+func QuaverHitPosOffsetY(hitPosition int, receptorH float64) float64 {
+	return float64(hitPosition)*R - 768 + receptorH
 }
 
-// QuaverColumnAlignment is the gist formula ColumnStart inverts:
-//
-//	ColumnAlignment = round( A * ( (-2*ColumnStart)/D - 1 ) )
-//	A = (1366 - ColumnSize*keys)/2 ; D = ColumnWidth*keys - (16/9*480)
-//
-// D is never 0 for integer widths (16/9*480 is not an integer multiple).
-func QuaverColumnAlignment(columnStart, columnWidth, columnSize, keys int) int {
-	a := (1366.0 - float64(columnSize*keys)) / 2.0
-	d := float64(columnWidth*keys) - osuPlayfieldWidth16x9
-	if a == 0 {
-		return 0 // stage fills the width; alignment is indeterminate
-	}
-	return roundI(a * ((-2.0*float64(columnStart))/d - 1.0))
+// QuaverColumnLightingOffsetY inverts LightPosition for a receptor written at
+// ReceptorPosOffsetY 0 that is receptorH tall.
+func QuaverColumnLightingOffsetY(lightPosition int, receptorH float64) float64 {
+	return 768 - receptorH - float64(lightPosition)*R
 }
 
-// ColumnStart inverts the gist ColumnAlignment formula:
-//
-//	ColumnAlignment = round( A * ( (-2*ColumnStart)/D - 1 ) )
-//	A = (1366 - SIZES)/2 ; D = WIDTHS - (16/9*480)
-//	SIZES = ColumnSize*keys ; WIDTHS = sum(ColumnWidth) = columnWidth*keys
-//
-// => ColumnStart = -D * (ColumnAlignment/A + 1) / 2.
-func ColumnStart(columnAlignment, columnSize, keys int, columnWidth float64) int {
-	sizes := float64(columnSize * keys)
-	widths := columnWidth * float64(keys)
-	a := (1366.0 - sizes) / 2.0
-	d := widths - osuPlayfieldWidth16x9
-	if a == 0 {
-		return 136 // osu! default; alignment is indeterminate when stage fills width
-	}
-	return roundI(-d * (float64(columnAlignment)/a + 1.0) / 2.0)
+// QuaverNoteHeightScale inverts NoteHeightScale.
+func QuaverNoteHeightScale(widthForNoteHeightScale float64) int {
+	return roundI(widthForNoteHeightScale * R / quaverPixel)
+}
+
+// QuaverLightingScale inverts LightingWidth.
+func QuaverLightingScale(lightingWidth float64) int {
+	return roundI(lightingWidth / 30 / quaverPixel * 100)
+}
+
+// QuaverHitLightingY places Quaver's hit lighting (centred on the receptor's
+// centre plus HitLightingY) on osu!'s hit line (where osu! centres it).
+func QuaverHitLightingY(hitPosOffsetY, receptorH float64) float64 {
+	return hitPosOffsetY - receptorH/2
 }

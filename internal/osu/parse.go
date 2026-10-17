@@ -38,11 +38,32 @@ func (s *Section) Int(key string, def int) int {
 	if !ok {
 		return def
 	}
-	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+	return parseInt(v, def)
+}
+
+// Float returns the numeric value for key, or def if absent/unparseable.
+func (s *Section) Float(key string, def float64) float64 {
+	v, ok := s.Get(key)
+	if !ok {
+		return def
+	}
+	return parseFloat(v, def)
+}
+
+func parseInt(v string, def int) int {
+	v = strings.TrimSpace(v)
+	if n, err := strconv.Atoi(v); err == nil {
 		return n
 	}
-	if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+	if f, err := strconv.ParseFloat(v, 64); err == nil {
 		return int(f)
+	}
+	return def
+}
+
+func parseFloat(v string, def float64) float64 {
+	if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+		return f
 	}
 	return def
 }
@@ -65,16 +86,19 @@ func (s *Section) FirstCSVInt(key string, def int) int {
 	if !ok {
 		return def
 	}
-	if i := strings.IndexByte(v, ','); i >= 0 {
-		v = v[:i]
+	first, _, _ := strings.Cut(v, ",")
+	return parseInt(first, def)
+}
+
+// FirstCSVFloat is FirstCSVInt for fractional values (lazer accepts e.g.
+// "ColumnWidth: 53.125").
+func (s *Section) FirstCSVFloat(key string, def float64) float64 {
+	v, ok := s.Get(key)
+	if !ok {
+		return def
 	}
-	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-		return n
-	}
-	if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-		return int(f)
-	}
-	return def
+	first, _, _ := strings.Cut(v, ",")
+	return parseFloat(first, def)
 }
 
 // SkinFile is a parsed osu! skin.ini: [General], [Fonts], and every [Mania]
@@ -107,7 +131,8 @@ func (sf *SkinFile) ManiaKeyCounts() []int {
 }
 
 // ParseSkinIni parses an osu! skin.ini. osu! uses `Key: Value` with `//`
-// full-line comments; [Mania] may repeat, one block per keycount.
+// comments, which may also trail a value ("HitPosition: 451 // hit line");
+// [Mania] may repeat, one block per keycount.
 func ParseSkinIni(data []byte) *SkinFile {
 	sf := &SkinFile{General: newParsedSection(), Fonts: newParsedSection()}
 	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
@@ -116,8 +141,16 @@ func ParseSkinIni(data []byte) *SkinFile {
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "//") {
+		line := sc.Text()
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		// Like LegacyDecoder.StripComments: everything from "//" on is a comment.
+		if i := strings.Index(line, "//"); i > 0 {
+			line = line[:i]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {

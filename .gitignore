@@ -1,5 +1,6 @@
 # Build artifacts (anchored to repo root so they don't match cmd/qoconv/)
 /dist/
+/build/
 /bin/
 /qoconv
 /qoconv.exe

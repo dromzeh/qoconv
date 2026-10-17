@@ -1,6 +1,6 @@
 // Package imageops provides the PNG transforms qoconv needs: decode/encode,
-// 90° rotation (health bars), spritesheet splitting (lighting/animation), and
-// scaling. Everything is standard-library only — no external image deps.
+// resampling, padding, 90° rotation (health bars), flipping (LN tails), and
+// spritesheet splitting/joining (lighting and judgement animations).
 package imageops
 
 import (
@@ -10,6 +10,8 @@ import (
 	"image/png"
 	"regexp"
 	"strconv"
+
+	xdraw "golang.org/x/image/draw"
 )
 
 // Decode parses PNG bytes into an image.
@@ -35,20 +37,33 @@ func Size(data []byte) (w, h int, err error) {
 	return cfg.Width, cfg.Height, nil
 }
 
+// Blank returns a w×h fully transparent image.
+func Blank(w, h int) image.Image { return image.NewNRGBA(image.Rect(0, 0, w, h)) }
+
+// toNRGBA returns src as a zero-origin *image.NRGBA, copying only if needed.
+func toNRGBA(src image.Image) *image.NRGBA {
+	if n, ok := src.(*image.NRGBA); ok && n.Rect.Min == (image.Point{}) {
+		return n
+	}
+	b := src.Bounds()
+	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(dst, dst.Rect, src, b.Min, draw.Src)
+	return dst
+}
+
 // Rotate90 rotates src by 90°, clockwise when cw is true. Quaver health bars are
 // vertical; osu! scorebars are horizontal, so they must be rotated on conversion.
 func Rotate90(src image.Image, cw bool) image.Image {
-	b := src.Bounds()
-	w, h := b.Dx(), b.Dy()
+	s := toNRGBA(src)
+	w, h := s.Rect.Dx(), s.Rect.Dy()
 	dst := image.NewNRGBA(image.Rect(0, 0, h, w))
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			c := src.At(b.Min.X+x, b.Min.Y+y)
+			dx, dy := y, w-1-x
 			if cw {
-				dst.Set(h-1-y, x, c)
-			} else {
-				dst.Set(y, w-1-x, c)
+				dx, dy = h-1-y, x
 			}
+			copy(dst.Pix[dst.PixOffset(dx, dy):][:4], s.Pix[s.PixOffset(x, y):][:4])
 		}
 	}
 	return dst
@@ -57,54 +72,62 @@ func Rotate90(src image.Image, cw bool) image.Image {
 // FlipVertical mirrors src top-to-bottom. Quaver's long-note end image is
 // oriented opposite to osu!'s NoteImage#T, so the tail must be flipped.
 func FlipVertical(src image.Image) image.Image {
-	b := src.Bounds()
-	w, h := b.Dx(), b.Dy()
-	dst := image.NewNRGBA(image.Rect(0, 0, w, h))
+	s := toNRGBA(src)
+	h := s.Rect.Dy()
+	dst := image.NewNRGBA(s.Rect)
 	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			dst.Set(x, h-1-y, src.At(b.Min.X+x, b.Min.Y+y))
-		}
+		copy(dst.Pix[y*dst.Stride:(y+1)*dst.Stride], s.Pix[(h-1-y)*s.Stride:(h-y)*s.Stride])
 	}
 	return dst
 }
 
-// Scale resizes src to w×h using bilinear sampling.
+// Scale resamples src to w×h with a Catmull-Rom filter, which stays sharp when
+// enlarging and anti-aliases properly when shrinking (e.g. a 433px cursor down
+// to 28px). Filtering happens in premultiplied alpha so transparent edges don't
+// pick up dark fringes. A zero-sized source or target yields a blank image.
 func Scale(src image.Image, w, h int) image.Image {
+	w, h = max(w, 0), max(h, 0)
 	b := src.Bounds()
-	sw, sh := b.Dx(), b.Dy()
-	dst := image.NewNRGBA(image.Rect(0, 0, w, h))
-	if sw == 0 || sh == 0 || w == 0 || h == 0 {
+	if b.Dx() == w && b.Dy() == h {
+		return src
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	if b.Empty() || w == 0 || h == 0 {
 		return dst
 	}
-	for y := 0; y < h; y++ {
-		fy := (float64(y) + 0.5) * float64(sh) / float64(h)
-		sy := int(fy)
-		if sy >= sh {
-			sy = sh - 1
-		}
-		for x := 0; x < w; x++ {
-			fx := (float64(x) + 0.5) * float64(sw) / float64(w)
-			sx := int(fx)
-			if sx >= sw {
-				sx = sw - 1
-			}
-			dst.Set(x, y, src.At(b.Min.X+sx, b.Min.Y+sy))
-		}
-	}
+	xdraw.CatmullRom.Scale(dst, dst.Rect, src, b, xdraw.Src, nil)
 	return dst
 }
 
-// PadBottom returns a copy of src with px transparent rows added below it
-// (same width). Used to position osu!'s bottom-anchored receptors.
-func PadBottom(src image.Image, px int) image.Image {
-	if px <= 0 {
+// ScaleBy resamples src by factor f, rounding each side to at least 1px.
+func ScaleBy(src image.Image, f float64) image.Image {
+	b := src.Bounds()
+	return Scale(src, max(1, round(float64(b.Dx())*f)), max(1, round(float64(b.Dy())*f)))
+}
+
+// Pad returns src surrounded by transparent margins (negative values count as 0).
+func Pad(src image.Image, top, right, bottom, left int) image.Image {
+	top, right, bottom, left = max(top, 0), max(right, 0), max(bottom, 0), max(left, 0)
+	if top|right|bottom|left == 0 {
 		return src
 	}
 	b := src.Bounds()
-	w, h := b.Dx(), b.Dy()
-	dst := image.NewNRGBA(image.Rect(0, 0, w, h+px))
-	draw.Draw(dst, image.Rect(0, 0, w, h), src, b.Min, draw.Src)
+	dst := image.NewNRGBA(image.Rect(0, 0, left+b.Dx()+right, top+b.Dy()+bottom))
+	draw.Draw(dst, image.Rect(left, top, left+b.Dx(), top+b.Dy()), src, b.Min, draw.Src)
 	return dst
+}
+
+// Square pads src with transparency to a square canvas. Centered keeps the
+// art in the middle; otherwise it stays pinned to the top-left corner, which
+// preserves where a non-centred cursor's hotspot sits.
+func Square(src image.Image, centered bool) image.Image {
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	dx, dy := max(h-w, 0), max(w-h, 0)
+	if centered {
+		return Pad(src, dy/2, dx-dx/2, dy-dy/2, dx/2)
+	}
+	return Pad(src, 0, dx, dy, 0)
 }
 
 var sheetRe = regexp.MustCompile(`(?i)^(.*)@(\d+)x(\d+)\.png$`)
@@ -130,12 +153,8 @@ func ParseSheetName(filename string) (base string, rows, cols int, ok bool) {
 func JoinRow(frames []image.Image) image.Image {
 	cw, ch := 0, 0
 	for _, f := range frames {
-		if w := f.Bounds().Dx(); w > cw {
-			cw = w
-		}
-		if h := f.Bounds().Dy(); h > ch {
-			ch = h
-		}
+		cw = max(cw, f.Bounds().Dx())
+		ch = max(ch, f.Bounds().Dy())
 	}
 	dst := image.NewNRGBA(image.Rect(0, 0, cw*len(frames), ch))
 	for i, f := range frames {
@@ -155,13 +174,16 @@ func SplitGrid(src image.Image, rows, cols int) []image.Image {
 	for r := 0; r < rows; r++ {
 		for c := 0; c < cols; c++ {
 			fr := image.NewNRGBA(image.Rect(0, 0, fw, fh))
-			for y := 0; y < fh; y++ {
-				for x := 0; x < fw; x++ {
-					fr.Set(x, y, src.At(b.Min.X+c*fw+x, b.Min.Y+r*fh+y))
-				}
-			}
+			draw.Draw(fr, fr.Rect, src, image.Pt(b.Min.X+c*fw, b.Min.Y+r*fh), draw.Src)
 			frames = append(frames, fr)
 		}
 	}
 	return frames
+}
+
+func round(f float64) int {
+	if f < 0 {
+		return -int(-f + 0.5)
+	}
+	return int(f + 0.5)
 }

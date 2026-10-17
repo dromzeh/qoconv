@@ -95,9 +95,11 @@ func TestConvertEndToEnd(t *testing.T) {
 	for _, want := range []string{
 		"Keys: 4",
 		"ColumnWidth: 88,88,88,88",
-		"ColumnStart: 252",
+		"ColumnStart: 251",
 		"HitPosition: 450",
 		"ComboPosition: 165",
+		"CursorRotate: 0",
+		"CursorCentre: 1",
 		"NoteImage0: qo-note-1",
 		"NoteImage0H: qo-head-1", // hold head
 		"NoteImage0L: qo-body-1", // hold body
@@ -116,7 +118,8 @@ func TestConvertEndToEnd(t *testing.T) {
 		"qo-note-1.png", "qo-note-4.png", "qo-head-1.png", "qo-body-1.png", "qo-tail-1.png",
 		"qo-key-1.png", "qo-keyD-4.png",
 		"qo-stage-left.png", "mania-hit300g.png", "mania-hit0.png",
-		"scorebar-bg.png", "scorebar-colour.png", "cursor.png",
+		"scorebar-bg.png", "scorebar-colour.png", "cursor.png", "cursor@2x.png",
+		"cursortrail.png", // blanked: Quaver has no trail
 		"score-0.png", "combo-9.png", "pause-overlay.png", "skin.ini",
 	}
 	for _, f := range wantFiles {
@@ -136,11 +139,22 @@ func TestConvertEndToEnd(t *testing.T) {
 		t.Errorf("qo-key-1 size = %dx%d (err %v), want 140x224 (aspect-scaled)", w, h, err)
 	}
 
-	// Stage hint: 566x30 source bottom-padded by its own height so its bottom
-	// edge sits on osu!'s centred hit line.
-	if w, h, err := imageops.Size(res.Output.Files["qo-stage-hint.png"]); err != nil || w != 566 || h != 60 {
-		t.Errorf("qo-stage-hint size = %dx%d (err %v), want 566x60 (bottom-padded)", w, h, err)
-	}
+	// Stage hint: 566x30 drawn 560 (4×140) wide by Quaver -> 29.7 tall; osu!
+	// draws it 1.442× its pixel height, so 21px, then bottom-padded by its own
+	// height so its bottom edge sits on osu!'s centred hit line.
+	wantSize(t, res, "qo-stage-hint.png", 560, 42)
+	// Stage border: Quaver keeps its aspect at full 768 height -> 43*768/677.
+	wantSize(t, res, "qo-stage-left.png", 49, 677)
+	// Cursor: forced square at Quaver's 40px-on-1080 size.
+	wantSize(t, res, "cursor.png", 28, 28)
+	wantSize(t, res, "cursor@2x.png", 57, 57)
+	// Judgements: Quaver draws them 100 tall (JudgementHitBurstScale); osu!
+	// settles hits at 0.7× and misses at 1×.
+	wantSize(t, res, "mania-hit300g.png", 143, 143)
+	wantSize(t, res, "mania-hit0.png", 100, 100)
+	// Digits: combo at ComboDisplayScale 45%, score at 18% / 0.96.
+	wantSize(t, res, "combo-0.png", 20, 32)
+	wantSize(t, res, "score-0.png", 3, 11)
 
 	// Dropped folders reported.
 	dropped := strings.Join(res.Report.Dropped, ",")
@@ -149,5 +163,51 @@ func TestConvertEndToEnd(t *testing.T) {
 	}
 	if len(res.Report.Converted) == 0 {
 		t.Error("expected non-empty Converted list")
+	}
+}
+
+func wantSize(t *testing.T, res *Result, name string, w, h int) {
+	t.Helper()
+	gw, gh, err := imageops.Size(res.Output.Files[name])
+	if err != nil || gw != w || gh != h {
+		t.Errorf("%s size = %dx%d (err %v), want %dx%d", name, gw, gh, err, w, h)
+	}
+}
+
+// An image that can't be encoded is reported, not silently dropped: a 1-pixel
+// spritesheet of 2 frames splits into zero-width frames, which PNG rejects.
+func TestEncodeFailureWarns(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel string, data []byte) {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("skin.ini", []byte("[4K]\nColumnSize = 140\n"))
+	for c := 1; c <= 4; c++ {
+		write("4k/Receptors/receptor-up-"+strconv.Itoa(c)+".png", pngBytes(t, 250, 400))
+	}
+	write("4k/Lighting/hitlighting@1x2.png", pngBytes(t, 1, 1))
+
+	sk, err := quaver.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Convert(sk, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	warns := strings.Join(res.Report.Warnings, "\n")
+	for _, f := range []string{"qo-lightingN-0.png", "qo-lightingN-1.png"} {
+		if !strings.Contains(warns, "could not encode "+f) {
+			t.Errorf("no warning for %s:\n%s", f, warns)
+		}
+		if res.Output.Files[f] != nil {
+			t.Errorf("%s written despite failing to encode", f)
+		}
 	}
 }

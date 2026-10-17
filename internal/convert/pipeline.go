@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dromzeh/qoconv/internal/imageops"
 	"github.com/dromzeh/qoconv/internal/osu"
 	"github.com/dromzeh/qoconv/internal/quaver"
 )
@@ -46,37 +45,36 @@ func Convert(sk *quaver.Skin, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("no convertible keymodes (4K/7K) found in this skin")
 	}
 
-	out := newOutput()
-	rep := &Report{}
+	c := &fwdCtx{src: sk.Source, out: newOutput(), rep: &Report{}}
 	skin := osu.NewSkin()
 	skin.General = buildGeneral(sk, opts.Name, opts.Author)
+	c.fonts = skin.Fonts
 
 	for _, mode := range modes {
-		cfg := sk.KeyModeOrEmpty(mode)
-		columnSize := cfg.Int("ColumnSize", 0)
-		receptorPos := cfg.Int("ReceptorPosOffsetY", 0)
-		rW, rH := imgDims(sk.Source, fmt.Sprintf("%dk/Receptors/receptor-up-1.png", mode))
+		cfg := sk.KeyModeConfig(mode)
+		rec := QuaverReceptor{ColumnSize: cfg.Float("ColumnSize", 0), ReceptorPosOffsetY: cfg.Float("ReceptorPosOffsetY", 0)}
+		rec.TexW, rec.TexH = c.size(ReceptorUpPath(mode, 1))
 
 		hitPos := opts.HitPosition
 		if hitPos < 0 {
-			hitPos = HitPosition(receptorPos, cfg.Int("HitPosOffsetY", 0), columnSize, rW, rH)
+			hitPos = HitPosition(rec, cfg.Float("HitPosOffsetY", 0))
 		}
 
-		mania := buildMania(cfg, mode, hitPos)
-		mapKeymodeAssets(sk.Source, mode, columnSize, receptorPos, rW, rH, out, mania.KV, rep)
+		mania := buildMania(cfg, mode, rec, hitPos)
+		c.keymode(mode, cfg, rec, mania.KV)
 		skin.Mania = append(skin.Mania, mania)
-		rep.position(maniaSummary(mode, mania))
+		c.rep.position(maniaSummary(mode, mania))
 	}
-	rep.suppress("judgement line")
-	rep.suppress("column dividers")
+	c.rep.suppress("judgement line")
+	c.rep.suppress("column dividers")
 
-	mapUniversal(sk.Source, out, skin.Fonts, rep, opts)
-	computeDropped(sk.Source, modes, opts, rep)
+	c.universal(sk.KeyModeConfig(modes[0]), sk.General().Bool("CenterCursor", false), opts)
+	c.dropped(modes, opts)
 
-	out.add("skin.ini", []byte(skin.Serialize()))
-	rep.warn("Health-bar rotation and exact hit/combo/score positions are approximate — verify in-game.")
+	c.out.add("skin.ini", []byte(skin.Serialize()))
+	c.rep.warn("Health-bar placement differs between the games; verify in-game.")
 
-	return &Result{Skin: skin, Output: out, Report: rep, Modes: modes}, nil
+	return &Result{Skin: skin, Output: c.out, Report: c.rep, Modes: modes}, nil
 }
 
 // maniaSummary is a one-line summary of a keymode's computed positions.
@@ -88,17 +86,4 @@ func maniaSummary(mode int, m *osu.Mania) string {
 	}
 	return fmt.Sprintf("%dK  HitPosition %s · ColumnStart %s · ColumnWidth %s · Combo %s · Score %s",
 		mode, g("HitPosition"), g("ColumnStart"), cw, g("ComboPosition"), g("ScorePosition"))
-}
-
-// imgDims returns a source image's pixel dimensions, or 0,0 if absent/unreadable.
-func imgDims(src quaver.Source, path string) (w, h int) {
-	data, err := src.ReadFile(path)
-	if err != nil {
-		return 0, 0
-	}
-	w, h, err = imageops.Size(data)
-	if err != nil {
-		return 0, 0
-	}
-	return w, h
 }

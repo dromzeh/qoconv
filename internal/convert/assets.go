@@ -11,14 +11,7 @@ import (
 	"github.com/dromzeh/qoconv/internal/quaver"
 )
 
-// blankPNG returns a 1×1 transparent PNG, used to override an osu! default
-// element that the Quaver skin doesn't provide (so the default doesn't leak in).
-func blankPNG() []byte {
-	b, _ := imageops.Encode(image.NewNRGBA(image.Rect(0, 0, 1, 1)))
-	return b
-}
-
-// Output is the flat set of osu! skin files (root filename -> bytes).
+// Output is the flat set of output skin files (forward-slash path -> bytes).
 type Output struct {
 	Files map[string][]byte
 }
@@ -26,6 +19,13 @@ type Output struct {
 func newOutput() *Output { return &Output{Files: map[string][]byte{}} }
 
 func (o *Output) add(name string, data []byte) { o.Files[name] = data }
+
+// blankPNG returns a 1×1 transparent PNG, used to override a default element
+// the source skin doesn't have, so the target game's default doesn't leak in.
+func blankPNG() []byte {
+	b, _ := imageops.Encode(imageops.Blank(1, 1))
+	return b
+}
 
 // rawCopy writes data to out as dst unchanged and records the conversion. It is
 // also the fallback when an image can't be decoded/encoded for a transform.
@@ -35,216 +35,329 @@ func rawCopy(out *Output, srcPath, dst string, data []byte, rep *Report) bool {
 	return true
 }
 
-// copyAsset copies src[path] to out as dst. Returns false (and records nothing)
-// if the source file is absent — callers decide whether absence is noteworthy.
-func copyAsset(src quaver.Source, path string, out *Output, dst string, rep *Report) bool {
-	data, err := src.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	return rawCopy(out, path, dst, data, rep)
+// fwdCtx carries a forward (Quaver -> osu!) conversion: the Quaver source,
+// the osu! output being built, and the report.
+type fwdCtx struct {
+	src   quaver.Source
+	out   *Output
+	rep   *Report
+	fonts *osu.KV // the osu! [Fonts] section, set when number fonts map
 }
 
-// mapImage reads src[path], applies fn, and writes the re-encoded result to out
-// as dst (appending note — which may be "" — to the report line). If the image
-// can't be decoded or re-encoded it falls back to copying the bytes unchanged.
-// Returns false only when the source file is absent.
-func mapImage(src quaver.Source, path string, out *Output, dst, note string, rep *Report, fn func(image.Image) image.Image) bool {
-	data, err := src.ReadFile(path)
+// blank writes a transparent placeholder unless the file was already produced.
+func (c *fwdCtx) blank(name string) {
+	if _, ok := c.out.Files[name]; !ok {
+		c.out.add(name, blankPNG())
+	}
+}
+
+// copy copies src[p] to dst unchanged. It returns false (recording nothing)
+// when the file is absent; callers decide whether absence is noteworthy.
+func (c *fwdCtx) copy(p, dst string) bool {
+	data, err := c.src.ReadFile(p)
 	if err != nil {
 		return false
 	}
-	img, err := imageops.Decode(data)
-	if err != nil {
-		return rawCopy(out, path, dst, data, rep)
+	return rawCopy(c.out, p, dst, data, c.rep)
+}
+
+// load decodes the image at p. Quaver also accepts a "{name}@{rows}x{cols}.png"
+// spritesheet wherever it takes a single image, so failing an exact match the
+// sheet's first frame is used.
+func (c *fwdCtx) load(p string) (img image.Image, used string, ok bool) {
+	if data, err := c.src.ReadFile(p); err == nil {
+		if img, err := imageops.Decode(data); err == nil {
+			return img, p, true
+		}
+		return nil, "", false
 	}
-	enc, err := imageops.Encode(fn(img))
-	if err != nil {
-		return rawCopy(out, path, dst, data, rep)
+	sheet, rows, cols, found := findSheet(c.src, path.Dir(p), strings.TrimSuffix(path.Base(p), ".png"))
+	if !found {
+		return nil, "", false
 	}
-	out.add(dst, enc)
-	rep.converted("%s -> %s%s", path, dst, note)
+	data, err := c.src.ReadFile(sheet)
+	if err != nil {
+		return nil, "", false
+	}
+	sheetImg, err := imageops.Decode(data)
+	if err != nil {
+		return nil, "", false
+	}
+	return imageops.SplitGrid(sheetImg, rows, cols)[0], sheet, true
+}
+
+// image writes src[p] transformed by fn (nil = unchanged) to dst. A file that
+// exists but can't be decoded is copied raw rather than lost. Returns false
+// only when no source image was found.
+func (c *fwdCtx) image(p, dst, note string, fn func(image.Image) image.Image) bool {
+	img, used, ok := c.load(p)
+	if !ok {
+		return c.copy(p, dst) // absent (false), or undecodable: keep the bytes
+	}
+	if fn == nil && used == p {
+		return c.copy(p, dst)
+	}
+	if fn != nil {
+		img = fn(img)
+	}
+	enc, err := imageops.Encode(img)
+	if err != nil {
+		return c.copy(used, dst)
+	}
+	c.out.add(dst, enc)
+	c.rep.converted("%s -> %s%s", used, dst, note)
 	return true
+}
+
+// size returns an image's pixel size (first frame for spritesheets), or 0,0.
+func (c *fwdCtx) size(p string) (w, h int) {
+	if data, err := c.src.ReadFile(p); err == nil {
+		if w, h, err := imageops.Size(data); err == nil {
+			return w, h
+		}
+		return 0, 0
+	}
+	if img, _, ok := c.load(p); ok {
+		return img.Bounds().Dx(), img.Bounds().Dy()
+	}
+	return 0, 0
 }
 
 // --- per-keymode assets (notes, holds, receptors, stage, lighting) ---
 
-// laneElement maps a per-column Quaver element to an osu! NoteImage/KeyImage key.
-type laneElement struct {
-	quaverPrefix string // e.g. "note-hitobject"
-	folder       string // e.g. "HitObjects"
-	dstPrefix    string // e.g. "qo-note"
-	keyFmt       string // e.g. "NoteImage%dH" (gets 0-based column)
-	receptor     bool   // receptors need un-stretching (see mapReceptor)
-	flipV        bool   // flip vertically (Quaver's LN tail is upside-down vs osu!)
-}
-
-// osu! hold-note suffixes are H=Head, L=Body, T=Tail (confirmed against the osu!
-// wiki — the community gist had H/L swapped, which tiled the head circle down
-// the body). Map Quaver's hold parts to the matching osu! suffix.
-var laneElements = []laneElement{
-	{"note-hitobject", "HitObjects", "qo-note", "NoteImage%d", false, false},
-	{"note-holdhitobject", "HitObjects", "qo-head", "NoteImage%dH", false, false}, // H = head
-	{"note-holdbody", "HitObjects", "qo-body", "NoteImage%dL", false, false},      // L = body
-	{"note-holdend", "HitObjects", "qo-tail", "NoteImage%dT", false, true},        // T = tail (flipped)
-	{"receptor-up", "Receptors", "qo-key", "KeyImage%d", true, false},
-	{"receptor-down", "Receptors", "qo-keyD", "KeyImage%dD", true, false},
-}
-
-func mapKeymodeAssets(src quaver.Source, mode, columnSize, receptorPosOffsetY, recW, recH int, out *Output, kv *osu.KV, rep *Report) {
+// keymode maps one keymode's lane, stage and lighting images, setting the
+// matching image keys on the osu! [Mania] block.
+func (c *fwdCtx) keymode(mode int, cfg *quaver.Section, rec QuaverReceptor, kv *osu.KV) {
 	m := fmt.Sprintf("%dk", mode)
-	for c := 1; c <= mode; c++ {
-		for _, el := range laneElements {
-			srcPath := fmt.Sprintf("%s/%s/%s-%d.png", m, el.folder, el.quaverPrefix, c)
-			dstBase := fmt.Sprintf("%s-%d", el.dstPrefix, c)
-			key := fmt.Sprintf(el.keyFmt, c-1) // osu! columns are 0-based
-
-			var ok bool
-			switch {
-			case el.receptor:
-				ok = mapReceptor(src, srcPath, out, dstBase+".png", columnSize, receptorPosOffsetY, recW, recH, rep)
-			case el.flipV:
-				ok = mapFlippedV(src, srcPath, out, dstBase+".png", rep)
-			default:
-				ok = copyAsset(src, srcPath, out, dstBase+".png", rep)
-			}
-			if ok {
-				kv.Set(key, dstBase) // osu! image keys omit the extension
-			} else if el.quaverPrefix == "note-hitobject" || el.quaverPrefix == "receptor-up" {
-				rep.missing("%s (column %d core image)", srcPath, c)
-			}
-		}
+	for col := 1; col <= mode; col++ {
+		c.lane(mode, col, cfg, rec, kv)
 	}
-	mapStage(src, m, out, kv, rep)
-	mapLighting(src, m, out, kv, rep)
+	c.stage(m, mode, cfg, kv)
+	c.columnLight(m, mode, cfg, rec, kv)
+	c.lighting(m, "hitlighting", "qo-lightingN", "LightingN", cfg.Int("HitLightingScale", 100), cfg, rec, kv)
+	c.lighting(m, "holdlighting", "qo-lightingL", "LightingL", cfg.Int("HoldLightingScale", cfg.Int("HitLightingScale", 100)), cfg, rec, kv)
 }
 
-// mapReceptor re-renders a receptor the way Quaver draws it. Quaver sizes the
-// receptor sprite from the receptor-up texture: ColumnSize wide, aspect-scaled
-// tall (recH×ColumnSize/recW), bottom edge ReceptorPosOffsetY above the screen
-// bottom; the pressed texture is stretched into the same box. osu! forces a key
-// image's width to ColumnWidth, draws its pixels 1:1 into the 768-tall space,
-// and anchors it to the stage bottom (ignoring HitPosition). So: resample the
-// full canvas (no trimming — the art's placement inside it matters) to
-// ColumnSize × aspect height, then pad transparent rows below it so the
-// bottom-anchored image rises by ReceptorPosOffsetY, exactly as in Quaver.
-// recW/recH are the receptor-up dimensions, used for BOTH states so the
-// pressed image fills the same box as in Quaver.
-func mapReceptor(src quaver.Source, path string, out *Output, dst string, columnSize, receptorPosOffsetY, recW, recH int, rep *Report) bool {
-	data, err := src.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	img, err := imageops.Decode(data)
-	if err != nil || columnSize <= 0 || recW <= 0 {
-		return rawCopy(out, path, dst, data, rep) // fall back to a raw copy
-	}
-	h := roundI(float64(recH) * float64(columnSize) / float64(recW))
-	pad := ReceptorBottomPad(receptorPosOffsetY)
-	img = imageops.PadBottom(imageops.Scale(img, columnSize, h), pad)
-	enc, err := imageops.Encode(img)
-	if err != nil {
-		return rawCopy(out, path, dst, data, rep)
-	}
-	out.add(dst, enc)
-	rep.converted("%s -> %s (scaled to %dx%d + %dpx bottom pad, Quaver receptor placement)", path, dst, columnSize, h, pad)
-	return true
-}
+// lane maps one column's notes, long-note parts and receptors.
+//
+// osu! hold-note suffixes are H=head, L=body, T=tail (the community gist had H
+// and L swapped). When the Quaver skin lacks an optional part, osu! would fall
+// back to its own default skin's texture, so point the key at the closest
+// Quaver image instead: the note for a missing LN head, the released receptor
+// for a missing pressed one.
+func (c *fwdCtx) lane(mode, col int, cfg *quaver.Section, rec QuaverReceptor, kv *osu.KV) {
+	m := fmt.Sprintf("%dk", mode)
+	idx := col - 1 // osu! columns are 0-based
+	obj := func(name string) string { return fmt.Sprintf("%s/HitObjects/%s-%d.png", m, name, col) }
+	set := func(key, dst string) { kv.Set(fmt.Sprintf(key, idx), strings.TrimSuffix(dst, ".png")) }
+	dst := func(prefix string) string { return fmt.Sprintf("%s-%d.png", prefix, col) }
 
-// mapFlippedV copies an image flipped top-to-bottom (used for the LN tail, which
-// Quaver stores upside-down relative to osu!'s NoteImage#T).
-func mapFlippedV(src quaver.Source, path string, out *Output, dst string, rep *Report) bool {
-	return mapImage(src, path, out, dst, " (flipped vertically)", rep, imageops.FlipVertical)
-}
-
-func mapStage(src quaver.Source, m string, out *Output, kv *osu.KV, rep *Report) {
-	for _, s := range []struct{ srcName, dstBase, key string }{
-		{"stage-left-border", "qo-stage-left", "StageLeft"},
-		{"stage-right-border", "qo-stage-right", "StageRight"},
-	} {
-		if copyAsset(src, fmt.Sprintf("%s/Stage/%s.png", m, s.srcName), out, s.dstBase+".png", rep) {
-			kv.Set(s.key, s.dstBase)
-		}
-	}
-	// osu! draws StageHint CENTRED on the hit line ("the judgement line is drawn
-	// in the centre of the image" — wiki/LegacyHitTarget); Quaver draws the
-	// overlay's BOTTOM edge on the hit line. Pad the canvas below by its own
-	// height so the content's bottom edge becomes the canvas centre.
-	hintPadded := mapImage(src, m+"/Stage/stage-hitposition-overlay.png", out, "qo-stage-hint.png",
-		" (bottom-padded so its bottom edge sits on the hit line)", rep, func(img image.Image) image.Image {
-			return imageops.PadBottom(img, img.Bounds().Dy())
-		})
-	if hintPadded {
-		kv.Set("StageHint", "qo-stage-hint")
+	note := c.image(obj("note-hitobject"), dst("qo-note"), "", nil)
+	if note {
+		set("NoteImage%d", dst("qo-note"))
 	} else {
-		// No Quaver hit-position overlay -> blank osu!'s default stage-hint line
-		// both by the default filename and via an explicit StageHint override.
-		blank := blankPNG()
-		out.add("qo-stage-hint.png", blank)
-		out.add("mania-stage-hint.png", blank)
-		kv.Set("StageHint", "qo-stage-hint")
-		rep.suppress("stage-hint line")
+		c.rep.missing("%s (column %d core image)", obj("note-hitobject"), col)
 	}
+
+	switch {
+	case c.image(obj("note-holdhitobject"), dst("qo-head"), "", nil):
+		set("NoteImage%dH", dst("qo-head"))
+	case note:
+		set("NoteImage%dH", dst("qo-note"))
+	}
+	if c.image(obj("note-holdbody"), dst("qo-body"), "", nil) {
+		set("NoteImage%dL", dst("qo-body"))
+	}
+	// Quaver's LN end is upside-down relative to osu!'s NoteImage#T, which osu!
+	// flips in downscroll (LegacyHoldNoteTailPiece). DrawLongNoteEnd = False
+	// hides it entirely.
+	if !cfg.Bool("DrawLongNoteEnd", true) {
+		c.blank(dst("qo-tail"))
+		set("NoteImage%dT", dst("qo-tail"))
+	} else if c.image(obj("note-holdend"), dst("qo-tail"), " (flipped vertically)", imageops.FlipVertical) {
+		set("NoteImage%dT", dst("qo-tail"))
+	}
+
+	// Each lane sizes its receptor from its own receptor-up texture.
+	up := ReceptorUpPath(mode, col)
+	laneRec := rec
+	laneRec.TexW, laneRec.TexH = c.size(up)
+	if c.receptor(up, dst("qo-key"), laneRec) {
+		set("KeyImage%d", dst("qo-key"))
+	} else {
+		// osu! only uses a skin's mania elements at all when it has key images
+		// (ManiaLegacySkinTransformer), so never leave one unset.
+		c.blank(dst("qo-key"))
+		set("KeyImage%d", dst("qo-key"))
+		c.rep.missing("%s (column %d core image)", up, col)
+	}
+	down := fmt.Sprintf("%s/Receptors/receptor-down-%d.png", m, col)
+	if c.receptor(down, dst("qo-keyD"), laneRec) {
+		set("KeyImage%dD", dst("qo-keyD"))
+	} else {
+		set("KeyImage%dD", dst("qo-key"))
+	}
+}
+
+// receptor re-renders a receptor the way Quaver draws it. Quaver sizes the
+// sprite from the lane's receptor-up texture: ColumnSize wide, aspect-scaled
+// tall, bottom edge ReceptorPosOffsetY above the screen bottom; the pressed
+// texture is stretched into the same box. osu! forces a key image's width to
+// ColumnWidth, draws its pixels 1:1 into the 768-tall space, and bottom-anchors
+// it (ignoring HitPosition). So: resample the whole canvas (the art's placement
+// inside it matters) to that box, then pad transparent rows below it.
+func (c *fwdCtx) receptor(p, dst string, rec QuaverReceptor) bool {
+	if !rec.Known() {
+		return c.image(p, dst, "", nil)
+	}
+	w, h, pad := roundI(rec.ColumnSize), roundI(rec.Height()), ReceptorBottomPad(rec.ReceptorPosOffsetY)
+	note := fmt.Sprintf(" (scaled to %dx%d + %dpx bottom pad, Quaver receptor placement)", w, h, pad)
+	return c.image(p, dst, note, func(img image.Image) image.Image {
+		return imageops.Pad(imageops.Scale(img, w, h), 0, 0, pad, 0)
+	})
+}
+
+func (c *fwdCtx) stage(m string, keys int, cfg *quaver.Section, kv *osu.KV) {
+	// Quaver stretches the borders to full screen height keeping their aspect
+	// (Stage.cs); osu! stretches only the height and keeps the native width. So
+	// bake Quaver's width in. StageReceptorPadding pushes Quaver's borders that
+	// far out from the columns; osu! draws them flush, so pad the inner side.
+	pad := roundI(cfg.Float("StageReceptorPadding", 0))
+	borders := []struct {
+		name, dst, key string
+		left           bool
+	}{
+		{"stage-left-border", "qo-stage-left.png", "StageLeft", true},
+		{"stage-right-border", "qo-stage-right.png", "StageRight", false},
+	}
+	for _, b := range borders {
+		ok := c.image(fmt.Sprintf("%s/Stage/%s.png", m, b.name), b.dst, " (resized to Quaver's full-height width)", func(img image.Image) image.Image {
+			s := img.Bounds().Size()
+			img = imageops.Scale(img, max(1, roundI(float64(s.X)*768/float64(s.Y))), s.Y)
+			if b.left {
+				return imageops.Pad(img, 0, pad, 0, 0)
+			}
+			return imageops.Pad(img, 0, 0, 0, pad)
+		})
+		if !ok {
+			c.blank(b.dst)
+			c.rep.suppress("stage borders")
+		}
+		kv.Set(b.key, strings.TrimSuffix(b.dst, ".png"))
+	}
+
+	// Quaver draws the hit-position overlay across the whole stage, aspect-
+	// scaled, with its BOTTOM edge on the hit line. osu! stretches StageHint to
+	// the stage width but draws it 0.9×1.6025 its native height, CENTRED on the
+	// line (LegacyHitTarget). So size it so osu!'s stretch lands on Quaver's
+	// height, then pad below by that height to move the bottom edge to centre.
+	stageW := QuaverStage{
+		Keys:                 keys,
+		ColumnSize:           cfg.Float("ColumnSize", 0),
+		NotePadding:          cfg.Float("NotePadding", 0),
+		StageReceptorPadding: cfg.Float("StageReceptorPadding", 0),
+	}.Width()
+	hint := c.image(m+"/Stage/stage-hitposition-overlay.png", "qo-stage-hint.png",
+		" (resized for osu!'s hint scaling, bottom edge on the hit line)", func(img image.Image) image.Image {
+			s := img.Bounds().Size()
+			w := max(1, roundI(stageW))
+			h := max(1, roundI(float64(s.Y)*float64(w)/float64(s.X)/(0.9*1.6025)))
+			return imageops.Pad(imageops.Scale(img, w, h), 0, 0, h, 0)
+		})
+	if !hint {
+		// Blank osu!'s default stage-hint line by filename and by key.
+		c.blank("qo-stage-hint.png")
+		c.blank("mania-stage-hint.png")
+		c.rep.suppress("stage-hint line")
+	}
+	kv.Set("StageHint", "qo-stage-hint")
 	// stage-bgmask / stage-distant-overlay have no osu! equivalent (dropped).
 }
 
-func mapLighting(src quaver.Source, m string, out *Output, kv *osu.KV, rep *Report) {
-	if copyAsset(src, m+"/Lighting/column-lighting.png", out, "qo-stage-light.png", rep) {
+// columnLight maps Quaver's column lighting (the glow over a pressed lane).
+// Quaver draws it ColumnSize wide and ColumnLightingScale×aspect tall, tinted
+// by ColumnColorN; osu! draws StageLight at the column width and native
+// height, tinted by ColourLightN (set in buildMania), bottom at LightPosition.
+func (c *fwdCtx) columnLight(m string, keys int, cfg *quaver.Section, rec QuaverReceptor, kv *osu.KV) {
+	_, tinted := columnColors(cfg, keys)
+	p := m + "/Lighting/column-lighting.png"
+	ok := tinted && c.image(p, "qo-stage-light.png", " (resized to Quaver's lighting size)", func(img image.Image) image.Image {
+		s := img.Bounds().Size()
+		w := max(1, roundI(rec.ColumnSize))
+		h := max(1, roundI(cfg.Float("ColumnLightingScale", 1)*float64(w)*float64(s.Y)/float64(s.X)))
+		return imageops.Scale(img, w, h)
+	})
+	if ok {
 		kv.Set("StageLight", "qo-stage-light")
-	} else {
-		// No Quaver column lighting -> blank osu!'s default column key-press glow.
-		out.add("mania-stage-light.png", blankPNG())
-		rep.suppress("column glow")
+		return
 	}
-	if !splitLighting(src, m, "hitlighting", out, "qo-lightingN", "LightingN", kv, rep) {
-		blankLighting(out, kv, "qo-lightingN", "LightingN")
+	if c.src.Exists(p) {
+		c.rep.warn("%s: column lighting has no ColumnColor set, so Quaver never shows it; left off.", strings.ToUpper(m))
 	}
-	if !splitLighting(src, m, "holdlighting", out, "qo-lightingL", "LightingL", kv, rep) {
-		blankLighting(out, kv, "qo-lightingL", "LightingL")
-	}
+	c.blank("mania-stage-light.png")
+	c.rep.suppress("column glow")
 }
 
-// blankLighting points an osu! note/hold lighting key at a transparent frame so
-// osu!'s default hit explosion doesn't show when Quaver has none.
-func blankLighting(out *Output, kv *osu.KV, base, key string) {
-	out.add(base+"-0.png", blankPNG())
-	kv.Set(key, base)
-}
-
-// splitLighting finds a "{base}@RxC.png" spritesheet and explodes it into osu!
-// animation frames "{dstBase}-0.png", "-1.png", … referenced by an osu! key.
-func splitLighting(src quaver.Source, m, base string, out *Output, dstBase, key string, kv *osu.KV, rep *Report) bool {
-	path, rows, cols, ok := findSheet(src, m+"/Lighting", base)
-	if !ok {
-		return false
+// lighting maps a hit/hold lighting animation ("{base}@RxC.png" spritesheet or
+// a single "{base}.png") into osu! frames "{dstBase}-0.png", "-1.png", ….
+//
+// Quaver centres the lighting on the receptor's centre plus HitLightingX/Y;
+// osu! centres it on the hit line. Padding each frame on the opposite side by
+// twice the offset moves the art by exactly that offset. The frames' size is
+// set by LightingNWidth/LightingLWidth in buildMania.
+func (c *fwdCtx) lighting(m, base, dstBase, key string, scale int, cfg *quaver.Section, rec QuaverReceptor, kv *osu.KV) {
+	frames, used := c.frames(m+"/Lighting", base)
+	if len(frames) == 0 || roundI(LightingWidth(scale)) <= 0 {
+		c.blank(dstBase + "-0.png")
+		kv.Set(key, dstBase)
+		return
 	}
-	data, err := src.ReadFile(path)
-	if err != nil {
-		return false
+	var dx, dy int
+	if px := lightingPixel(scale); rec.Known() && px > 0 {
+		dx = roundI(cfg.Float("HitLightingX", 0) / px)
+		dy = roundI((rec.Height()/2 + cfg.Float("HitLightingY", 0) - cfg.Float("HitPosOffsetY", 0)) / px)
 	}
-	img, err := imageops.Decode(data)
-	if err != nil {
-		rep.warn("could not decode lighting sheet %s: %v", path, err)
-		return false
-	}
-	for i, fr := range imageops.SplitGrid(img, rows, cols) {
+	for i, fr := range frames {
+		fr = imageops.Pad(fr, 2*dy, -2*dx, -2*dy, 2*dx)
+		name := fmt.Sprintf("%s-%d.png", dstBase, i)
 		enc, err := imageops.Encode(fr)
 		if err != nil {
+			c.rep.warn("could not encode %s (from %s): %v", name, used, err)
 			continue
 		}
-		out.add(fmt.Sprintf("%s-%d.png", dstBase, i), enc)
+		c.out.add(name, enc)
 	}
 	kv.Set(key, dstBase)
-	rep.converted("%s -> %s-{0..%d}.png [%s]", path, dstBase, rows*cols-1, key)
-	return true
+	c.rep.converted("%s -> %s-{0..%d}.png [%s]", used, dstBase, len(frames)-1, key)
+}
+
+// frames loads an animation from dir: a "{base}@RxC.png" spritesheet split into
+// frames, or a single "{base}.png" as one frame.
+func (c *fwdCtx) frames(dir, base string) ([]image.Image, string) {
+	if sheet, rows, cols, ok := findSheet(c.src, dir, base); ok {
+		if data, err := c.src.ReadFile(sheet); err == nil {
+			if img, err := imageops.Decode(data); err == nil {
+				return imageops.SplitGrid(img, rows, cols), sheet
+			}
+			c.rep.warn("could not decode %s", sheet)
+		}
+	}
+	p := dir + "/" + base + ".png"
+	if data, err := c.src.ReadFile(p); err == nil {
+		if img, err := imageops.Decode(data); err == nil {
+			return []image.Image{img}, p
+		}
+		c.rep.warn("could not decode %s", p)
+	}
+	return nil, ""
 }
 
 func findSheet(src quaver.Source, dir, base string) (sheetPath string, rows, cols int, ok bool) {
 	prefix := strings.ToLower(dir + "/" + base + "@")
 	for _, p := range src.List() {
 		if strings.HasPrefix(strings.ToLower(p), prefix) {
-			if _, r, c, ok2 := imageops.ParseSheetName(path.Base(p)); ok2 {
-				return p, r, c, true
+			if _, r, cl, ok := imageops.ParseSheetName(path.Base(p)); ok {
+				return p, r, cl, true
 			}
 		}
 	}
@@ -253,118 +366,211 @@ func findSheet(src quaver.Source, dir, base string) (sheetPath string, rows, col
 
 // --- universal assets (judgements, health, cursor, pause, numbers, extras) ---
 
-func mapUniversal(src quaver.Source, out *Output, fonts *osu.KV, rep *Report, opts Options) {
-	// Judgements -> default osu! filenames (auto-loaded; no skin.ini key needed).
-	judge := []struct{ q, o string }{
-		{"judge-marv", "mania-hit300g"},
-		{"judge-perf", "mania-hit300"},
-		{"judge-great", "mania-hit200"},
-		{"judge-good", "mania-hit100"},
-		{"judge-okay", "mania-hit50"},
-		{"judge-miss", "mania-hit0"},
-	}
-	for _, j := range judge {
-		copyAsset(src, "Judgements/"+j.q+".png", out, j.o+".png", rep)
-	}
+// Quaver's cursor is drawn 40×40 on its 1080-tall screen whatever the
+// texture's size or shape (Wobble Cursor); osu! draws cursor.png at native
+// size in its 768 space, @2x at half. These are that size in each file.
+const (
+	cursorSize   = 28 // 40 × 768/1080 = 28.4
+	cursorSize2x = 57
+)
 
-	// Health bars: rotate 90° (vertical Quaver -> horizontal osu! scorebar).
-	rotateAsset(src, "Health/health-background.png", out, "scorebar-bg.png", opts.RotateHealthCW, rep)
-	rotateAsset(src, "Health/health-foreground.png", out, "scorebar-colour.png", opts.RotateHealthCW, rep)
+// universal maps the keymode-independent assets. primary is the first
+// converted keymode's config: Quaver keeps the judgement/number/health scales
+// per keymode, but osu! has one set of these images.
+func (c *fwdCtx) universal(primary *quaver.Section, centerCursor bool, opts Options) {
+	c.judgements(primary.Float("JudgementHitBurstScale", 100))
+	c.health(primary, opts.RotateHealthCW)
+	c.cursor(centerCursor)
 
-	copyAsset(src, "Cursor/main-cursor.png", out, "cursor.png", rep)
+	c.copy("Pause/pause-continue.png", "pause-continue.png")
+	c.copy("Pause/pause-retry.png", "pause-retry.png")
+	c.copy("Pause/pause-back.png", "pause-back.png")
+	c.copy("Pause/pause-background.png", "pause-overlay.png")
 
-	// Pause menu.
-	copyAsset(src, "Pause/pause-continue.png", out, "pause-continue.png", rep)
-	copyAsset(src, "Pause/pause-retry.png", out, "pause-retry.png", rep)
-	copyAsset(src, "Pause/pause-back.png", out, "pause-back.png", rep)
-	copyAsset(src, "Pause/pause-background.png", out, "pause-overlay.png", rep)
-
-	// Numbers -> osu! score/combo fonts.
-	scoreN := 0
-	for i := 0; i <= 9; i++ {
-		if copyAsset(src, fmt.Sprintf("Numbers/score-%d.png", i), out, fmt.Sprintf("score-%d.png", i), rep) {
-			scoreN++
-		}
-	}
-	copyAsset(src, "Numbers/score-percent.png", out, "score-percent.png", rep)
-	copyAsset(src, "Numbers/score-decimal.png", out, "score-dot.png", rep)
-	comboN := 0
-	for i := 0; i <= 9; i++ {
-		if copyAsset(src, fmt.Sprintf("Numbers/combo-%d.png", i), out, fmt.Sprintf("combo-%d.png", i), rep) {
-			comboN++
-		}
-	}
-	if scoreN > 0 {
-		fonts.Set("ScorePrefix", "score")
-		fonts.Set("ScoreOverlap", "0")
-	}
-	if comboN > 0 {
-		fonts.Set("ComboPrefix", "combo")
-		fonts.Set("ComboOverlap", "0")
-	}
+	c.numbers(primary)
 
 	// Quaver has no hit-burst particles, combo bursts, or kiai stars; blank osu!'s
 	// defaults so they don't spawn on the converted skin.
 	for _, name := range []string{
 		"particle50.png", "particle100.png", "particle300.png",
-		"comboburst.png", "star.png", "star2.png",
+		"comboburst.png", "comboburst-mania.png", "star.png", "star2.png",
 		"mania-stage-bottom.png", // Quaver has no bottom stage border
 	} {
-		if _, exists := out.Files[name]; !exists {
-			out.add(name, blankPNG())
-		}
+		c.blank(name)
 	}
-	rep.suppress("hit particles")
-	rep.suppress("combo bursts")
-	rep.suppress("kiai stars")
+	c.rep.suppress("hit particles")
+	c.rep.suppress("combo bursts")
+	c.rep.suppress("kiai stars")
 
 	if opts.Grades {
-		mapGrades(src, out, rep)
+		c.grades()
 	}
 	if opts.Hitsounds {
-		mapSounds(src, out, rep)
+		c.sounds()
 	}
 }
 
-func rotateAsset(src quaver.Source, path string, out *Output, dst string, cw bool, rep *Report) {
-	mapImage(src, path, out, dst, " (rotated 90°)", rep, func(img image.Image) image.Image {
-		return imageops.Rotate90(img, cw)
-	})
+// judgements maps Quaver's judgement bursts to osu!'s default mania-hit*
+// filenames (auto-loaded; no skin.ini key needed). Quaver draws them
+// JudgementHitBurstScale tall (aspect kept). osu! draws them at native size
+// but animates the scale (LegacyManiaJudgementPiece): hits pop and settle at
+// 0.7× for most of their life, misses settle at 1×. Size each so the settled
+// size matches Quaver's. Quaver spritesheets become osu! frame animations.
+func (c *fwdCtx) judgements(height float64) {
+	judge := []struct {
+		q, o   string
+		settle float64
+	}{
+		{"judge-marv", "mania-hit300g", 0.7},
+		{"judge-perf", "mania-hit300", 0.7},
+		{"judge-great", "mania-hit200", 0.7},
+		{"judge-good", "mania-hit100", 0.7},
+		{"judge-okay", "mania-hit50", 0.7},
+		{"judge-miss", "mania-hit0", 1},
+	}
+	for _, j := range judge {
+		frames, used := c.frames("Judgements", j.q)
+		if len(frames) == 0 {
+			continue
+		}
+		target := height / j.settle
+		for i, fr := range frames {
+			s := fr.Bounds().Size()
+			fr = imageops.Scale(fr, max(1, roundI(target*float64(s.X)/float64(s.Y))), max(1, roundI(target)))
+			name := j.o + ".png"
+			if len(frames) > 1 {
+				name = fmt.Sprintf("%s-%d.png", j.o, i)
+			}
+			enc, err := imageops.Encode(fr)
+			if err != nil {
+				c.rep.warn("could not encode %s (from %s): %v", name, used, err)
+				continue
+			}
+			c.out.add(name, enc)
+		}
+		c.rep.converted("%s -> %s (%d frame(s), scaled to Quaver's judgement size)", used, j.o, len(frames))
+	}
 }
 
-// mapGrades is an opportunistic extra: Quaver letter grades -> osu! ranking-*.
-func mapGrades(src quaver.Source, out *Output, rep *Report) {
-	grades := map[string]string{
-		"grade-small-x":  "ranking-X-small", // perfect
-		"grade-small-ss": "ranking-SS-small",
-		"grade-small-s":  "ranking-S-small",
-		"grade-small-a":  "ranking-A-small",
-		"grade-small-b":  "ranking-B-small",
-		"grade-small-c":  "ranking-C-small",
-		"grade-small-d":  "ranking-D-small",
-		"grade-small-f":  "ranking-D-small", // osu! has no F; reuse D
+// health maps Quaver's health bar to osu!'s scorebar. Quaver's default bar is
+// vertical (HealthBarType Vertical); osu!'s is always horizontal, so a vertical
+// bar is rotated. Quaver draws it at HealthBarScale% of the texture.
+func (c *fwdCtx) health(cfg *quaver.Section, cw bool) {
+	vertical := !strings.EqualFold(cfg.Str("HealthBarType", "Vertical"), "Horizontal")
+	scale := cfg.Float("HealthBarScale", 100) / 100
+	fn := func(img image.Image) image.Image {
+		img = imageops.ScaleBy(img, scale)
+		if vertical {
+			img = imageops.Rotate90(img, cw)
+		}
+		return img
 	}
-	for q, o := range grades {
-		copyAsset(src, "Grades/"+q+".png", out, o+".png", rep)
+	note := ""
+	if vertical {
+		note = " (rotated 90°)"
 	}
-}
-
-// mapSounds is an opportunistic extra: Quaver SFX -> osu! hitsounds.
-func mapSounds(src quaver.Source, out *Output, rep *Report) {
-	sounds := map[string]string{
-		"sound-hit":        "normal-hitnormal.wav",
-		"sound-hitclap":    "normal-hitclap.wav",
-		"sound-hitwhistle": "normal-hitwhistle.wav",
-		"sound-hitfinish":  "normal-hitfinish.wav",
-		"sound-combobreak": "combobreak.wav",
+	if !c.image("Health/health-background.png", "scorebar-bg.png", note, fn) {
+		c.blank("scorebar-bg.png") // otherwise osu!'s whole default bar shows
 	}
-	for q, o := range sounds {
-		copyAsset(src, "SFX/"+q+".wav", out, o, rep)
+	c.image("Health/health-foreground.png", "scorebar-colour.png", note, fn)
+	// Quaver has no health marker; blank osu!'s old-style ones.
+	for _, name := range []string{"scorebar-ki.png", "scorebar-kidanger.png", "scorebar-kidanger2.png"} {
+		c.blank(name)
 	}
 }
 
-// computeDropped records top-level Quaver folders that have no osu! equivalent.
-func computeDropped(src quaver.Source, modes []int, opts Options, rep *Report) {
+// cursor maps Quaver's cursor to osu!'s: forced square like Quaver draws it
+// (padded, so the art keeps its shape and a non-centred hotspot stays at the
+// top-left), at Quaver's on-screen size. Quaver has no trail, middle piece or
+// smoke, so osu!'s defaults for those are blanked.
+func (c *fwdCtx) cursor(centered bool) {
+	if img, used, ok := c.load("Cursor/main-cursor.png"); ok {
+		sq := imageops.Square(img, centered)
+		for _, v := range []struct {
+			name string
+			size int
+		}{{"cursor.png", cursorSize}, {"cursor@2x.png", cursorSize2x}} {
+			enc, err := imageops.Encode(imageops.Scale(sq, v.size, v.size))
+			if err != nil {
+				c.rep.warn("could not encode %s (from %s): %v", v.name, used, err)
+				continue
+			}
+			c.out.add(v.name, enc)
+		}
+		c.rep.converted("%s -> cursor.png, cursor@2x.png (Quaver's 40px cursor size)", used)
+	}
+	for _, name := range []string{"cursortrail.png", "cursormiddle.png", "cursor-smoke.png"} {
+		c.blank(name)
+	}
+	c.rep.suppress("cursor trail")
+}
+
+// numbers maps Quaver's number fonts to osu!'s score/combo fonts. Quaver draws
+// combo digits at ComboDisplayScale% and score digits at ScoreDisplayScale%
+// (both 768 units), while osu! draws the combo at native size and the score
+// counter at 0.96× (LegacyScoreCounter); bake the difference into the images.
+func (c *fwdCtx) numbers(cfg *quaver.Section) {
+	comboScale := cfg.Float("ComboDisplayScale", 45) / 100
+	scoreScale := cfg.Float("ScoreDisplayScale", 18) / 100 / 0.96
+	scaled := func(p, dst string, f float64) bool {
+		return c.image(p, dst, "", func(img image.Image) image.Image { return imageops.ScaleBy(img, f) })
+	}
+
+	score, combo := 0, 0
+	for i := 0; i <= 9; i++ {
+		if scaled(fmt.Sprintf("Numbers/score-%d.png", i), fmt.Sprintf("score-%d.png", i), scoreScale) {
+			score++
+		}
+		if scaled(fmt.Sprintf("Numbers/combo-%d.png", i), fmt.Sprintf("combo-%d.png", i), comboScale) {
+			combo++
+		}
+	}
+	scaled("Numbers/score-percent.png", "score-percent.png", scoreScale)
+	scaled("Numbers/score-decimal.png", "score-dot.png", scoreScale)
+	if score > 0 {
+		c.fonts.Set("ScorePrefix", "score")
+		c.fonts.Set("ScoreOverlap", "0")
+	}
+	if combo > 0 {
+		c.fonts.Set("ComboPrefix", "combo")
+		c.fonts.Set("ComboOverlap", "0")
+	}
+}
+
+// grades is an opportunistic extra: Quaver letter grades -> osu! ranking-*.
+func (c *fwdCtx) grades() {
+	for _, g := range []struct{ q, o string }{
+		{"grade-small-x", "ranking-X-small"}, // perfect
+		{"grade-small-ss", "ranking-SS-small"},
+		{"grade-small-s", "ranking-S-small"},
+		{"grade-small-a", "ranking-A-small"},
+		{"grade-small-b", "ranking-B-small"},
+		{"grade-small-c", "ranking-C-small"},
+		{"grade-small-d", "ranking-D-small"},
+	} {
+		c.copy("Grades/"+g.q+".png", g.o+".png")
+	}
+	// osu! has no F grade; use it for D only when the skin has no D.
+	if _, ok := c.out.Files["ranking-D-small.png"]; !ok {
+		c.copy("Grades/grade-small-f.png", "ranking-D-small.png")
+	}
+}
+
+// sounds is an opportunistic extra: Quaver SFX -> osu! hitsounds.
+func (c *fwdCtx) sounds() {
+	for _, s := range []struct{ q, o string }{
+		{"sound-hit", "normal-hitnormal.wav"},
+		{"sound-hitclap", "normal-hitclap.wav"},
+		{"sound-hitwhistle", "normal-hitwhistle.wav"},
+		{"sound-hitfinish", "normal-hitfinish.wav"},
+		{"sound-combobreak", "combobreak.wav"},
+	} {
+		c.copy("SFX/"+s.q+".wav", s.o)
+	}
+}
+
+// dropped records top-level Quaver folders that have no osu! equivalent.
+func (c *fwdCtx) dropped(modes []int, opts Options) {
 	consumed := map[string]bool{
 		"cursor": true, "judgements": true, "health": true,
 		"numbers": true, "pause": true,
@@ -379,16 +585,15 @@ func computeDropped(src quaver.Source, modes []int, opts Options, rep *Report) {
 		consumed["sfx"] = true
 	}
 	seen := map[string]bool{}
-	for _, p := range src.List() {
-		i := strings.IndexByte(p, '/')
-		if i < 0 {
+	for _, p := range c.src.List() {
+		top, _, nested := strings.Cut(p, "/")
+		if !nested {
 			continue // root files (skin.ini, credits) — not "dropped folders"
 		}
-		top := p[:i]
 		lt := strings.ToLower(top)
 		if !consumed[lt] && !seen[lt] {
 			seen[lt] = true
-			rep.Dropped = append(rep.Dropped, top)
+			c.rep.Dropped = append(c.rep.Dropped, top)
 		}
 	}
 }
