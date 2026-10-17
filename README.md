@@ -2,7 +2,7 @@
 
 # qoconv
 
-Convert your Quaver skins to osu!mania and back. Drop a skin into the app, tune the layout against a to-scale preview and install it, or do the whole thing with a one-line command. Supports 4K and 7K.
+Convert your Quaver skins to osu!mania and back. Drop a skin into the app, tune the layout against a to-scale preview and install it, or do the whole thing with a one-line command. Supports every keymode from 1K to 10K.
 
 ![last commit](https://shieldcn.dev/github/last-commit/dromzeh/qoconv.svg?variant=outline&size=xs)
 ![license](https://shieldcn.dev/github/license/dromzeh/qoconv.svg?variant=outline&size=xs)
@@ -30,12 +30,13 @@ Every position and size is computed from the skin's own geometry (receptor sizes
 - **HUD and UI:** judgements (including animated ones), health bar, cursor, combo and score fonts, pause menu
 - **Cursor:** drawn square at Quaver's size, with osu!'s spin, trail and smoke turned off, since Quaver's cursor has none of those
 - Keys a Quaver skin leaves out fall back to Quaver's built-in default skin values (Bar, or whichever `DefaultSkin` names), the same as in-game
-- Auto-detects keymodes (4K and 7K) and writes one `[Mania]` block per mode
+- Auto-detects keymodes (1K to 10K) and writes one `[Mania]` block per mode, each with its own images
+- Keymodes other than 4K and 7K take anything they're missing from the skin's shared `[SharedK]` section and `sharedk/` folder, just like Quaver does. Keymodes a skin only gets that way are offered too, but stay off unless you pick them
 - Blanks the osu! defaults Quaver skins don't have, like the judgement line, column glow, cursor trail, hit particles, combo bursts, and kiai stars, so the result matches the original
 
 Quaver-only screens like song select, results, and the scoreboard have no osu!mania equivalent and are skipped. The conversion report prints exactly what was converted, suppressed, and skipped.
 
-Going the other way (osu!mania to Quaver) maps the same elements back: `[Mania]` geometry becomes `[4K]`/`[7K]` values, per-column note/hold/receptor images come through (including osu!'s default `mania-*` filenames and `@2x` variants), and lighting animations get rebuilt into Quaver spritesheets, along with stage borders, judgements, health bars, fonts, grades, and hitsounds. Every layout key is written out explicitly so Quaver's own defaults don't creep in. Anything osu!-only, like standard mode or menu elements, is skipped and counted in the report.
+Going the other way (osu!mania to Quaver) maps the same elements back: each `[Mania]` block's geometry becomes that keymode's `[nK]` values, per-column note/hold/receptor images come through (including osu!'s default `mania-*` filenames and `@2x` variants), and lighting animations get rebuilt into Quaver spritesheets, along with stage borders, judgements, health bars, fonts, grades, and hitsounds. Every layout key is written out explicitly so Quaver's own defaults don't creep in. Anything osu!-only, like standard mode or menu elements, is skipped and counted in the report.
 
 ## Download
 
@@ -54,8 +55,8 @@ ARM64 builds are there too for Windows and Linux.
 
 1. **Pick a skin.** Drop a Quaver `.qs`, an osu! `.osk`, or a skin folder onto the window. Or click the banner (Ctrl+O) to choose from the skins already installed in osu! and Quaver, or to browse for a file or folder. qoconv works out which way to convert. You can also drop a skin onto `qoconv.exe` itself.
 2. **Check the preview.** It draws the converted stage to scale the way the target game will: receptors, notes falling onto the hit line, and the judgement and combo where they'll sit.
-3. **Tune the layout.** The main positions and sizes each have a slider under **Layout**, and the preview updates as you drag. Changed values light up. Click ↺ or double-click a slider to reset one, or **Reset all** to reset the whole keymode. The tabs on the right switch between 4K and 7K. When converting to Quaver, hit and light positions are shown as places on screen, so resizing columns doesn't move them.
-4. **Check the output.** The **Output** tab sets the skin's name and author, where it's saved, whether to make an archive and install it, the extras to include (grades, hitsounds) and the keymodes to convert. It also lists anything that was skipped.
+3. **Tune the layout.** The main positions and sizes each have a slider under **Layout**, and the preview updates as you drag. Changed values light up. Click ↺ or double-click a slider to reset one, or **Reset all** to reset the whole keymode. The keymode button at the top right switches between the converted keymodes, and a dot marks any you've changed. When converting to Quaver, hit and light positions are shown as places on screen, so resizing columns doesn't move them.
+4. **Check the output.** The **Output** tab sets the skin's name and author, where it's saved, whether to make an archive and install it, the extras to include (grades, hitsounds) and the keymodes to convert (dashed ones aren't set up by the skin itself). It also lists anything that was skipped.
 5. **Convert** (Ctrl+Enter). You get a ready-to-use skin folder plus an importable archive (`.osk` for osu!, `.qs` for Quaver), and it can open straight in the game. The status line links to the folder afterwards.
 
 ## Command line
@@ -77,7 +78,7 @@ qoconv --input "MySkin.osk" --output "C:\path\to\Skins"
 | `--output`           | `Documents/qoconv/output` | Where to write the skin folder and archive.                                                                           |
 | `--name`             | from `skin.ini`           | Override the skin name.                                                                                               |
 | `--author`           | from `skin.ini`           | Override the author.                                                                                                  |
-| `--keymodes`         | all detected              | Limit output, for example `4k,7k`.                                                                                    |
+| `--keymodes`         | the skin's own            | Which keymodes to convert (1K to 10K), for example `4k,7k`.                                                           |
 | `--osk`              | `true`                    | Also write an importable archive (`.osk`, or `.qs` when converting to Quaver). Use `--osk=false` for the folder only. |
 | `--open`             | `false`                   | Install the converted skin by opening the archive (makes one if needed).                                              |
 | `--hit-position`     | auto                      | Override osu! HitPosition (`0`-`480`; higher sits lower on screen). Only applies when converting to osu!.             |
