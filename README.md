@@ -1,3 +1,5 @@
+<div align="center">
+
 # qoconv
 
 Convert your Quaver skins to osu!mania and back. Drop a skin into the app, tune the layout against a to-scale preview and install it, or do the whole thing with a one-line command. Supports 4K and 7K.
@@ -5,9 +7,11 @@ Convert your Quaver skins to osu!mania and back. Drop a skin into the app, tune 
 ![last commit](https://shieldcn.dev/github/last-commit/dromzeh/qoconv.svg?variant=outline&size=xs)
 ![license](https://shieldcn.dev/github/license/dromzeh/qoconv.svg?variant=outline&size=xs)
 
-<p align="center">
-  <img src="https://x.dromzeh.dev/ShareX/2026/10/qoconv_vIPtcaooEn.png" alt="qoconv converting an osu!mania skin to Quaver, with a to-scale 7K stage preview and layout sliders" width="640">
-</p>
+<a href="https://github.com/dromzeh/qoconv/releases/latest"><img src="https://shieldcn.dev/badge/Download-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-blue.svg?size=lg&logo=ri:FiDownload" alt="Download for Windows, macOS and Linux"></a>
+
+<img src="https://x.dromzeh.dev/ShareX/2026/10/qoconv_vIPtcaooEn.png" alt="qoconv converting an osu!mania skin to Quaver, with a to-scale 7K stage preview and layout sliders" width="640">
+
+</div>
 
 ---
 
