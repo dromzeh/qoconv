@@ -75,8 +75,9 @@ type SkinInfo struct {
 	Author string `json:"author"`
 	From   string `json:"from"` // "Quaver" / "osu!"
 	To     string `json:"to"`
-	Ext    string `json:"ext"` // output archive extension
-	Modes  []int  `json:"modes"`
+	Ext    string `json:"ext"`    // output archive extension
+	Modes  []int  `json:"modes"`  // keymodes converted unless deselected
+	Extra  []int  `json:"extra"`  // keymodes offered but off until selected (job.Skin.Borrowed)
 	Output string `json:"output"` // suggested output directory
 	Banner string `json:"banner"` // URL of a background image from the skin, or ""
 }
@@ -88,7 +89,7 @@ func (a *App) Load(skinPath string) (SkinInfo, error) {
 		return SkinInfo{}, friendly(err)
 	}
 	if len(s.Modes) == 0 {
-		return SkinInfo{}, fmt.Errorf("this %s skin has no 4K or 7K setup to convert", s.Direction.From())
+		return SkinInfo{}, fmt.Errorf("this %s skin has no 1K-10K setup to convert", s.Direction.From())
 	}
 	a.mu.Lock()
 	a.skin, a.res = s, nil
@@ -96,7 +97,7 @@ func (a *App) Load(skinPath string) (SkinInfo, error) {
 	return SkinInfo{
 		Path: s.Path, Name: s.Name, Author: s.Author,
 		From: s.Direction.From(), To: s.Direction.To(), Ext: s.Direction.Ext(),
-		Modes: s.Modes, Output: a.cfg.OutputDir, Banner: bannerURL(s),
+		Modes: s.Modes, Extra: s.Borrowed, Output: a.cfg.OutputDir, Banner: bannerURL(s),
 	}, nil
 }
 

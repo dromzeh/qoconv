@@ -2,6 +2,7 @@ package convert
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/dromzeh/qoconv/internal/osu"
@@ -39,13 +40,14 @@ type Result struct {
 func Convert(sk *quaver.Skin, opts Options) (*Result, error) {
 	modes := opts.KeyModes
 	if modes == nil {
-		modes = sk.PresentKeyModes()
+		modes = sk.DefaultKeyModes()
 	}
 	if len(modes) == 0 {
-		return nil, fmt.Errorf("no convertible keymodes (4K/7K) found in this skin")
+		return nil, fmt.Errorf("no convertible keymodes (1K-10K) found in this skin")
 	}
 
-	c := &fwdCtx{src: sk.Source, out: newOutput(), rep: &Report{}}
+	// Keymodes that fall back to the shared keymode read its textures as their own.
+	c := &fwdCtx{src: sk.ResolvedSource(modes), out: newOutput(), rep: &Report{}}
 	skin := osu.NewSkin()
 	skin.General = buildGeneral(sk, opts.Name, opts.Author)
 	c.fonts = skin.Fonts
@@ -69,7 +71,7 @@ func Convert(sk *quaver.Skin, opts Options) (*Result, error) {
 	c.rep.suppress("column dividers")
 
 	c.universal(sk.KeyModeConfig(modes[0]), sk.General().Bool("CenterCursor", false), opts)
-	c.dropped(modes, opts)
+	c.dropped(modes, slices.ContainsFunc(modes, sk.UsesSharedK), opts)
 
 	c.out.add("skin.ini", []byte(skin.Serialize()))
 	c.rep.warn("Health-bar placement differs between the games; verify in-game.")

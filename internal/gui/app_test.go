@@ -74,11 +74,11 @@ func TestAppFlow(t *testing.T) {
 		t.Fatalf("override not applied: %+v", p.Modes)
 	}
 
-	note := fmt.Sprintf("/out/%d/qo-note-1.png", p.Gen)
+	note := fmt.Sprintf("/out/%d/qo-4k-note-1.png", p.Gen)
 	if get(t, a, note) != http.StatusOK {
 		t.Errorf("%s not served", note)
 	}
-	if get(t, a, fmt.Sprintf("/out/%d/qo-note-1.png", p.Gen-1)) != http.StatusNotFound {
+	if get(t, a, fmt.Sprintf("/out/%d/qo-4k-note-1.png", p.Gen-1)) != http.StatusNotFound {
 		t.Error("stale preview generation still served")
 	}
 	if get(t, a, fmt.Sprintf("/out/%d/skin.ini", p.Gen)) != http.StatusNotFound {
@@ -145,7 +145,7 @@ func TestConvertDropsStaleResult(t *testing.T) {
 	if err != nil || p.Gen != 1 || a.res != res {
 		t.Errorf("install = gen %d, %v", p.Gen, err)
 	}
-	if get(t, a, fmt.Sprintf("/out/%d/qo-note-1.png", p.Gen)) != http.StatusOK {
+	if get(t, a, fmt.Sprintf("/out/%d/qo-4k-note-1.png", p.Gen)) != http.StatusOK {
 		t.Error("installed result not served")
 	}
 }

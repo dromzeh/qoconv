@@ -209,6 +209,21 @@ func TestReverseEndToEnd(t *testing.T) {
 	}
 }
 
+func TestColumnStyles(t *testing.T) {
+	for keys, want := range map[int]string{
+		1:  "S",
+		2:  "11",
+		4:  "1221",
+		5:  "12S21",
+		7:  "121S121",
+		10: "1212112121",
+	} {
+		if got := strings.Join(columnStyles(keys), ""); got != want {
+			t.Errorf("columnStyles(%d) = %s, want %s", keys, got, want)
+		}
+	}
+}
+
 // A Quaver skin must not be detected as an osu! one.
 func TestIsOsuSkinRejectsQuaver(t *testing.T) {
 	src, err := quaver.OpenSource(buildSampleSkin(t))

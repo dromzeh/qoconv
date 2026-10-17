@@ -146,6 +146,29 @@ func TestTuneRenameWrite(t *testing.T) {
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 
+// One column has no gaps, so 1K offers no column spacing and won't take one.
+func TestOneKeyHasNoSpacing(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "skin.ini"), []byte("[1K]\nColumnSize = 100\n"))
+	writePNG(t, filepath.Join(dir, "1k", "Receptors", "receptor-up-1.png"), 100, 100)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Convert(convert.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range res.Fields(1) {
+		if f.Key == "ColumnSpacing" {
+			t.Error("1K offers ColumnSpacing")
+		}
+	}
+	if err := res.Set(1, "ColumnSpacing", "10"); err == nil {
+		t.Error("Set(1K ColumnSpacing) should fail")
+	}
+}
+
 func TestPlayfieldOsu(t *testing.T) {
 	s, _ := Open(quaverSkin(t))
 	res, err := s.Convert(convert.DefaultOptions())
@@ -222,7 +245,7 @@ func TestScanSkins(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "b mania", "skin.ini"), []byte("[Mania]\nKeys: 7\n"))
 	writeFile(t, filepath.Join(dir, "A Mania", "Skin.ini"), []byte("[Mania]\nKeys: 4\n"))
 	writeFile(t, filepath.Join(dir, "std only", "skin.ini"), []byte("[General]\nName: x\n"))
-	writeFile(t, filepath.Join(dir, "five key", "skin.ini"), []byte("[Mania]\nKeys: 5\n"))
+	writeFile(t, filepath.Join(dir, "twelve key", "skin.ini"), []byte("[Mania]\nKeys: 12\n")) // past Quaver's 10K
 	writeFile(t, filepath.Join(dir, "loose.osk"), []byte("zip"))
 
 	got := scanSkins(dir, "osu!", osuConvertible)
@@ -234,8 +257,10 @@ func TestScanSkins(t *testing.T) {
 	writeFile(t, filepath.Join(q, "by section", "skin.ini"), []byte("[7K]\nColumnSize = 60\n"))
 	writePNG(t, filepath.Join(q, "by folder", "4k", "Receptors", "receptor-up-1.png"), 2, 2)
 	writeFile(t, filepath.Join(q, "by folder", "skin.ini"), []byte("[General]\nName = x\n"))
+	writePNG(t, filepath.Join(q, "SharedK only", "SharedK", "HitObjects", "note-hitobject-1.png"), 2, 2)
+	writeFile(t, filepath.Join(q, "SharedK only", "skin.ini"), []byte("[General]\nName = x\n"))
 	writeFile(t, filepath.Join(q, "nothing", "skin.ini"), []byte("[General]\nName = x\n"))
-	if got := scanSkins(q, "Quaver", quaverConvertible); len(got) != 2 {
+	if got := scanSkins(q, "Quaver", quaverConvertible); len(got) != 3 {
 		t.Errorf("Quaver skins = %+v", got)
 	}
 	if scanSkins(filepath.Join(q, "missing"), "Quaver", quaverConvertible) != nil {

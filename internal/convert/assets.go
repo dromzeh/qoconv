@@ -58,8 +58,12 @@ func (c *fwdCtx) copy(p, dst string) bool {
 	if err != nil {
 		return false
 	}
-	return rawCopy(c.out, p, dst, data, c.rep)
+	return rawCopy(c.out, c.origin(p), dst, data, c.rep)
 }
+
+// origin names the skin file behind p for the report: a keymode's nk/ path
+// may really be a sharedk/ file (quaver.Skin.ResolvedSource).
+func (c *fwdCtx) origin(p string) string { return quaver.Origin(c.src, p) }
 
 // load decodes the image at p. Quaver also accepts a "{name}@{rows}x{cols}.png"
 // spritesheet wherever it takes a single image, so failing an exact match the
@@ -105,7 +109,7 @@ func (c *fwdCtx) image(p, dst, note string, fn func(image.Image) image.Image) bo
 		return c.copy(used, dst)
 	}
 	c.out.add(dst, enc)
-	c.rep.converted("%s -> %s%s", used, dst, note)
+	c.rep.converted("%s -> %s%s", c.origin(used), dst, note)
 	return true
 }
 
@@ -125,6 +129,11 @@ func (c *fwdCtx) size(p string) (w, h int) {
 
 // --- per-keymode assets (notes, holds, receptors, stage, lighting) ---
 
+// outName is the output file for one of a keymode's images. Each [Mania] block
+// gets its own files, so converting several keymodes never overwrites one's
+// art with another's.
+func outName(mode int, name string) string { return fmt.Sprintf("qo-%dk-%s", mode, name) }
+
 // keymode maps one keymode's lane, stage and lighting images, setting the
 // matching image keys on the osu! [Mania] block.
 func (c *fwdCtx) keymode(mode int, cfg *quaver.Section, rec QuaverReceptor, kv *osu.KV) {
@@ -134,8 +143,8 @@ func (c *fwdCtx) keymode(mode int, cfg *quaver.Section, rec QuaverReceptor, kv *
 	}
 	c.stage(m, mode, cfg, kv)
 	c.columnLight(m, mode, cfg, rec, kv)
-	c.lighting(m, "hitlighting", "qo-lightingN", "LightingN", cfg.Int("HitLightingScale", 100), cfg, rec, kv)
-	c.lighting(m, "holdlighting", "qo-lightingL", "LightingL", cfg.Int("HoldLightingScale", cfg.Int("HitLightingScale", 100)), cfg, rec, kv)
+	c.lighting(m, "hitlighting", outName(mode, "lightingN"), "LightingN", cfg.Int("HitLightingScale", 100), cfg, rec, kv)
+	c.lighting(m, "holdlighting", outName(mode, "lightingL"), "LightingL", cfg.Int("HoldLightingScale", cfg.Int("HitLightingScale", 100)), cfg, rec, kv)
 }
 
 // lane maps one column's notes, long-note parts and receptors.
@@ -150,52 +159,52 @@ func (c *fwdCtx) lane(mode, col int, cfg *quaver.Section, rec QuaverReceptor, kv
 	idx := col - 1 // osu! columns are 0-based
 	obj := func(name string) string { return fmt.Sprintf("%s/HitObjects/%s-%d.png", m, name, col) }
 	set := func(key, dst string) { kv.Set(fmt.Sprintf(key, idx), strings.TrimSuffix(dst, ".png")) }
-	dst := func(prefix string) string { return fmt.Sprintf("%s-%d.png", prefix, col) }
+	dst := func(name string) string { return outName(mode, fmt.Sprintf("%s-%d.png", name, col)) }
 
-	note := c.image(obj("note-hitobject"), dst("qo-note"), "", nil)
+	note := c.image(obj("note-hitobject"), dst("note"), "", nil)
 	if note {
-		set("NoteImage%d", dst("qo-note"))
+		set("NoteImage%d", dst("note"))
 	} else {
 		c.rep.missing("%s (column %d core image)", obj("note-hitobject"), col)
 	}
 
 	switch {
-	case c.image(obj("note-holdhitobject"), dst("qo-head"), "", nil):
-		set("NoteImage%dH", dst("qo-head"))
+	case c.image(obj("note-holdhitobject"), dst("head"), "", nil):
+		set("NoteImage%dH", dst("head"))
 	case note:
-		set("NoteImage%dH", dst("qo-note"))
+		set("NoteImage%dH", dst("note"))
 	}
-	if c.image(obj("note-holdbody"), dst("qo-body"), "", nil) {
-		set("NoteImage%dL", dst("qo-body"))
+	if c.image(obj("note-holdbody"), dst("body"), "", nil) {
+		set("NoteImage%dL", dst("body"))
 	}
 	// Quaver's LN end is upside-down relative to osu!'s NoteImage#T, which osu!
 	// flips in downscroll (LegacyHoldNoteTailPiece). DrawLongNoteEnd = False
 	// hides it entirely.
 	if !cfg.Bool("DrawLongNoteEnd", true) {
-		c.blank(dst("qo-tail"))
-		set("NoteImage%dT", dst("qo-tail"))
-	} else if c.image(obj("note-holdend"), dst("qo-tail"), " (flipped vertically)", imageops.FlipVertical) {
-		set("NoteImage%dT", dst("qo-tail"))
+		c.blank(dst("tail"))
+		set("NoteImage%dT", dst("tail"))
+	} else if c.image(obj("note-holdend"), dst("tail"), " (flipped vertically)", imageops.FlipVertical) {
+		set("NoteImage%dT", dst("tail"))
 	}
 
 	// Each lane sizes its receptor from its own receptor-up texture.
 	up := ReceptorUpPath(mode, col)
 	laneRec := rec
 	laneRec.TexW, laneRec.TexH = c.size(up)
-	if c.receptor(up, dst("qo-key"), laneRec) {
-		set("KeyImage%d", dst("qo-key"))
+	if c.receptor(up, dst("key"), laneRec) {
+		set("KeyImage%d", dst("key"))
 	} else {
 		// osu! only uses a skin's mania elements at all when it has key images
 		// (ManiaLegacySkinTransformer), so never leave one unset.
-		c.blank(dst("qo-key"))
-		set("KeyImage%d", dst("qo-key"))
+		c.blank(dst("key"))
+		set("KeyImage%d", dst("key"))
 		c.rep.missing("%s (column %d core image)", up, col)
 	}
 	down := fmt.Sprintf("%s/Receptors/receptor-down-%d.png", m, col)
-	if c.receptor(down, dst("qo-keyD"), laneRec) {
-		set("KeyImage%dD", dst("qo-keyD"))
+	if c.receptor(down, dst("keyD"), laneRec) {
+		set("KeyImage%dD", dst("keyD"))
 	} else {
-		set("KeyImage%dD", dst("qo-key"))
+		set("KeyImage%dD", dst("key"))
 	}
 }
 
@@ -227,8 +236,8 @@ func (c *fwdCtx) stage(m string, keys int, cfg *quaver.Section, kv *osu.KV) {
 		name, dst, key string
 		left           bool
 	}{
-		{"stage-left-border", "qo-stage-left.png", "StageLeft", true},
-		{"stage-right-border", "qo-stage-right.png", "StageRight", false},
+		{"stage-left-border", outName(keys, "stage-left.png"), "StageLeft", true},
+		{"stage-right-border", outName(keys, "stage-right.png"), "StageRight", false},
 	}
 	for _, b := range borders {
 		ok := c.image(fmt.Sprintf("%s/Stage/%s.png", m, b.name), b.dst, " (resized to Quaver's full-height width)", func(img image.Image) image.Image {
@@ -257,7 +266,8 @@ func (c *fwdCtx) stage(m string, keys int, cfg *quaver.Section, kv *osu.KV) {
 		NotePadding:          cfg.Float("NotePadding", 0),
 		StageReceptorPadding: cfg.Float("StageReceptorPadding", 0),
 	}.Width()
-	hint := c.image(m+"/Stage/stage-hitposition-overlay.png", "qo-stage-hint.png",
+	hintName := outName(keys, "stage-hint.png")
+	hint := c.image(m+"/Stage/stage-hitposition-overlay.png", hintName,
 		" (resized for osu!'s hint scaling, bottom edge on the hit line)", func(img image.Image) image.Image {
 			s := img.Bounds().Size()
 			w := max(1, roundI(stageW))
@@ -266,11 +276,11 @@ func (c *fwdCtx) stage(m string, keys int, cfg *quaver.Section, kv *osu.KV) {
 		})
 	if !hint {
 		// Blank osu!'s default stage-hint line by filename and by key.
-		c.blank("qo-stage-hint.png")
+		c.blank(hintName)
 		c.blank("mania-stage-hint.png")
 		c.rep.suppress("stage-hint line")
 	}
-	kv.Set("StageHint", "qo-stage-hint")
+	kv.Set("StageHint", strings.TrimSuffix(hintName, ".png"))
 	// stage-bgmask / stage-distant-overlay have no osu! equivalent (dropped).
 }
 
@@ -281,18 +291,19 @@ func (c *fwdCtx) stage(m string, keys int, cfg *quaver.Section, kv *osu.KV) {
 func (c *fwdCtx) columnLight(m string, keys int, cfg *quaver.Section, rec QuaverReceptor, kv *osu.KV) {
 	_, tinted := columnColors(cfg, keys)
 	p := m + "/Lighting/column-lighting.png"
-	ok := tinted && c.image(p, "qo-stage-light.png", " (resized to Quaver's lighting size)", func(img image.Image) image.Image {
+	lightName := outName(keys, "stage-light.png")
+	ok := tinted && c.image(p, lightName, " (resized to Quaver's lighting size)", func(img image.Image) image.Image {
 		s := img.Bounds().Size()
 		w := max(1, roundI(rec.ColumnSize))
 		h := max(1, roundI(cfg.Float("ColumnLightingScale", 1)*float64(w)*float64(s.Y)/float64(s.X)))
 		return imageops.Scale(img, w, h)
 	})
 	if ok {
-		kv.Set("StageLight", "qo-stage-light")
+		kv.Set("StageLight", strings.TrimSuffix(lightName, ".png"))
 		return
 	}
 	if c.src.Exists(p) {
-		c.rep.warn("%s: column lighting has no ColumnColor set, so Quaver never shows it; left off.", strings.ToUpper(m))
+		c.rep.warnMode(keys, "column lighting has no ColumnColor set, so Quaver never shows it; left off.")
 	}
 	c.blank("mania-stage-light.png")
 	c.rep.suppress("column glow")
@@ -328,7 +339,7 @@ func (c *fwdCtx) lighting(m, base, dstBase, key string, scale int, cfg *quaver.S
 		c.out.add(name, enc)
 	}
 	kv.Set(key, dstBase)
-	c.rep.converted("%s -> %s-{0..%d}.png [%s]", used, dstBase, len(frames)-1, key)
+	c.rep.converted("%s -> %s-{0..%d}.png [%s]", c.origin(used), dstBase, len(frames)-1, key)
 }
 
 // frames loads an animation from dir: a "{base}@RxC.png" spritesheet split into
@@ -570,10 +581,11 @@ func (c *fwdCtx) sounds() {
 }
 
 // dropped records top-level Quaver folders that have no osu! equivalent.
-func (c *fwdCtx) dropped(modes []int, opts Options) {
+// shared is whether a converted keymode borrowed from sharedk/.
+func (c *fwdCtx) dropped(modes []int, shared bool, opts Options) {
 	consumed := map[string]bool{
 		"cursor": true, "judgements": true, "health": true,
-		"numbers": true, "pause": true,
+		"numbers": true, "pause": true, "sharedk": shared,
 	}
 	for _, n := range modes {
 		consumed[fmt.Sprintf("%dk", n)] = true

@@ -243,6 +243,53 @@ body.dragging .banner { box-shadow: inset 0 0 0 2px var(--accent); }
 .seg button:hover { color: var(--text); }
 .seg button[aria-selected="true"] { background: var(--line); color: var(--text); }
 
+/* Keymode switcher: the current keymode, opening a fixed 1K-10K grid so each
+   keymode always sits in the same spot. */
+.keymode { position: relative; }
+.keymode-btn {
+  display: flex; align-items: center; gap: 6px;
+  height: 26px;
+  padding: 0 9px 0 10px;
+  border: 0; border-radius: 5px;
+  background: var(--field);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.keymode-btn svg { width: 10px; height: 10px; fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.keymode-btn:hover svg, .keymode-btn[aria-expanded="true"] svg { stroke: var(--text); }
+.keymode-btn:disabled svg { display: none; }
+.mode-grid {
+  position: absolute; top: calc(100% + 4px); right: 0;
+  z-index: 20;
+  display: grid; grid-template-columns: repeat(5, 36px); gap: 2px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.mode-grid button {
+  position: relative;
+  height: 26px;
+  padding: 0;
+  border: 0; border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.mode-grid button:hover:not(:disabled),
+.mode-grid button[aria-current="true"] { background: var(--line); color: var(--text); }
+.mode-grid button:disabled { color: var(--faint); opacity: 0.5; }
+/* A keymode with tuned values. */
+.mode-grid button.changed::after {
+  content: "";
+  position: absolute; top: 4px; right: 4px;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 /* Layout: label / value / slider rows */
 .rows { display: grid; align-content: start; }
 .row {
@@ -336,8 +383,26 @@ button.small {
 button.small:hover { background: var(--faint); }
 .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; }
 .checks label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
-.modes { display: flex; gap: 12px; }
-.modes label { display: flex; align-items: center; gap: 6px; }
+.modes { grid-column: 1 / -1; display: grid; gap: 3px; margin-top: 2px; font-size: 12px; }
+.mode-chips { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
+.mode-chips button {
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line); border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.mode-chips button:hover:not(:disabled) { color: var(--text); border-color: var(--faint); }
+.mode-chips button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+/* Not set up by the skin; Quaver fills it in from the skin's shared keymode. */
+.mode-chips button.borrowed { border-style: dashed; }
+.mode-chips button:disabled { border-color: transparent; color: var(--faint); opacity: 0.45; }
 input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
 .notes {
   flex: 1;
@@ -373,7 +438,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px;
 .made { margin: 0; display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
 .made a { color: var(--text); font-weight: 600; text-decoration: none; }
 .made a:hover { text-decoration: underline; text-underline-offset: 2px; }
-.heart { width: 12px; height: 12px; fill: var(--accent); transition: fill 300ms; position: relative; top: -1px; } /* optical centre against the capitals */
+.heart { width: 12px; height: 12px; fill: var(--accent); transition: fill 300ms; }
 .socials { display: flex; align-items: center; gap: 14px; }
 .socials a { display: grid; place-items: center; color: var(--muted); transition: color 150ms; }
 .socials a:hover { color: var(--text); }

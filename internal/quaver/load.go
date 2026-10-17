@@ -6,8 +6,9 @@ import (
 	"strings"
 )
 
-// SupportedKeyModes lists the keymodes qoconv recognizes for conversion.
-var SupportedKeyModes = []int{4, 7}
+// SupportedKeyModes lists the keymodes qoconv converts: every one Quaver
+// plays (ModeHelper.MaxKeyCount is 10).
+var SupportedKeyModes = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 
 // OpenSource opens a skin (.qs/.osk/.zip archive or an unpacked folder) for
 // reading. If the skin is wrapped in a sub-folder, paths are rebased so callers
@@ -45,20 +46,51 @@ func FromSource(src Source) (*Skin, error) {
 	return sk, nil
 }
 
-// PresentKeyModes returns the supported keymodes this skin actually provides,
-// detected from either a [nK] config section or an "nk/" asset folder.
+// PresentKeyModes returns the supported keymodes this skin sets up itself,
+// with a [nK] config section or an "nk/" asset folder.
 func (sk *Skin) PresentKeyModes() []int {
-	var modes []int
-	for _, n := range SupportedKeyModes {
-		if sk.KeyMode(n) != nil || sk.hasModeFolder(n) {
-			modes = append(modes, n)
-		}
-	}
-	return modes
+	own, _ := sk.KeyModesWith(sk.hasFolder)
+	return own
 }
 
-func (sk *Skin) hasModeFolder(n int) bool {
-	prefix := strings.ToLower(fmt.Sprintf("%dk/", n))
+// SharedKeyModes returns the supported keymodes the skin doesn't set up but
+// Quaver still skins from its sharedk/ folder (UsesSharedK).
+func (sk *Skin) SharedKeyModes() []int {
+	_, shared := sk.KeyModesWith(sk.hasFolder)
+	return shared
+}
+
+// DefaultKeyModes returns the keymodes to convert when none are picked: the
+// ones the skin sets up, or failing that the ones it skins from sharedk/.
+func (sk *Skin) DefaultKeyModes() []int {
+	own, shared := sk.KeyModesWith(sk.hasFolder)
+	if len(own) > 0 {
+		return own
+	}
+	return shared
+}
+
+// KeyModesWith is PresentKeyModes and SharedKeyModes for a skin whose files
+// aren't loaded: hasFolder reports whether the skin has a top-level folder
+// (asked in lower case).
+func (sk *Skin) KeyModesWith(hasFolder func(name string) bool) (own, shared []int) {
+	hasShared := hasFolder("sharedk")
+	for _, n := range SupportedKeyModes {
+		switch {
+		case sk.KeyMode(n) != nil || hasFolder(fmt.Sprintf("%dk", n)):
+			own = append(own, n)
+		case hasShared && sk.UsesSharedK(n):
+			shared = append(shared, n)
+		}
+	}
+	return own, shared
+}
+
+func (sk *Skin) hasFolder(name string) bool {
+	if sk.Source == nil {
+		return false
+	}
+	prefix := name + "/"
 	for _, p := range sk.Source.List() {
 		if strings.HasPrefix(strings.ToLower(p), prefix) {
 			return true

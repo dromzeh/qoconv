@@ -4,6 +4,7 @@
 package quaver
 
 import (
+	"cmp"
 	"fmt"
 	"strconv"
 	"strings"
@@ -175,21 +176,60 @@ func (sk *Skin) General() *Section {
 	return newSection("General")
 }
 
-// KeyMode returns the [4K]/[7K]-style config section for n keys, or nil.
+// KeyMode returns the [nK] config section for n keys, or nil.
 func (sk *Skin) KeyMode(n int) *Section {
 	return sk.Section(fmt.Sprintf("%dK", n))
 }
 
+// UsesSharedK reports whether n keys fall back to the skin's shared keymode
+// ([SharedK] values, sharedk/ textures) for whatever [nK] and nk/ leave out.
+// Quaver only has default textures for 4K and 7K, so every other keymode does
+// unless the skin turns it off (UseFallback = False).
+func (sk *Skin) UsesSharedK(n int) bool {
+	return sk.KeyMode(n).Bool("UseFallback", n != 4 && n != 7)
+}
+
 // KeyModeConfig returns the [nK] section as Quaver resolves it: the skin's own
-// values, with every key it omits filled from the built-in default skin it
-// names (DefaultSkin = Bar/Arrow/Circle, Bar when unset). Never nil, even when
-// the skin has mode assets but no [nK] block.
+// values, then the built-in default skin's (DefaultSkin = Bar/Arrow/Circle,
+// Bar when unset), then for a keymode that uses SharedK the skin's [SharedK]
+// values, and last the default skin's [SharedK]. Never nil, even when the skin
+// has mode assets but no [nK] block. Explicit still answers from [nK] alone.
 func (sk *Skin) KeyModeConfig(n int) *Section {
-	s := sk.KeyMode(n)
-	if s == nil {
-		s = newSection(fmt.Sprintf("%dK", n))
+	own := sk.KeyMode(n)
+	if own == nil {
+		own = newSection(fmt.Sprintf("%dK", n))
 	}
-	cp := *s
-	cp.fallback = defaultKeyMode(s.Str("DefaultSkin", ""), n)
-	return &cp
+	var shared *Section // [SharedK], when n falls back to it
+	if sk.UsesSharedK(n) {
+		shared = sk.Section("SharedK")
+	}
+	// Quaver settles the default skin as it reads (SkinKeys.ReadConfig). Its
+	// shared values load from the one named before it gets to the skin's
+	// [SharedK]: [nK]'s, or [SharedK]'s if [nK] asks for the fallback itself.
+	// The keymode's own defaults load from the last one named.
+	base := defaultSkinName(own)
+	if own.Bool("UseFallback", false) {
+		base = defaultSkinName(shared)
+	}
+	def := cmp.Or(defaultSkinName(own), defaultSkinName(shared), base)
+	// The shared defaults come last either way, so a keymode that turns
+	// UseFallback off still has defaults behind its own values.
+	return chain(own, defaultKeyMode(def, n), shared, defaultKeyMode(base, 0))
+}
+
+// chain links copies of secs, and of the fallbacks each already has, so each
+// answers what the ones before it don't. nil entries are skipped and the
+// inputs are left as they were.
+func chain(secs ...*Section) *Section {
+	var head *Section
+	next := &head
+	for _, s := range secs {
+		for ; s != nil; s = s.fallback {
+			cp := *s
+			cp.fallback = nil
+			*next = &cp
+			next = &cp.fallback
+		}
+	}
+	return head
 }

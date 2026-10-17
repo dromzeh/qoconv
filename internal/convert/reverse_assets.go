@@ -121,16 +121,20 @@ func (rc *revCtx) copyImage(base, dst, note string, fn func(image.Image) image.I
 // columnStyles returns osu!'s default per-column image styles — the "1"/"2"/
 // "S" suffixes of mania-note1/mania-note2/mania-noteS — used when a [Mania]
 // block doesn't override NoteImage*/KeyImage* paths.
+//
+// Like LegacyManiaColumnElement: an odd stage's middle column is "S", and the
+// rest alternate 1, 2, 1, … inwards from each edge (4K: 1 2 2 1).
 func columnStyles(keys int) []string {
-	switch keys {
-	case 4:
-		return []string{"1", "2", "2", "1"}
-	case 7:
-		return []string{"1", "2", "1", "S", "1", "2", "1"}
-	}
 	out := make([]string, keys)
 	for i := range out {
-		out[i] = "1"
+		switch edge := min(i, keys-1-i); {
+		case keys%2 == 1 && i == keys/2:
+			out[i] = "S"
+		case edge%2 == 0:
+			out[i] = "1"
+		default:
+			out[i] = "2"
+		}
 	}
 	return out
 }
@@ -212,7 +216,7 @@ func (rc *revCtx) stage(cfg *osu.Section, m string, keys, columnSize int) {
 		return imageops.Scale(img, max(1, stageW), max(1, roundI(float64(img.Bounds().Dy())*0.9*1.6025)))
 	}
 	if rc.copyImage(cfg.Str("StageHint", "mania-stage-hint"), m+"/Stage/stage-hitposition-overlay.png", " (resized to osu!'s hint size)", hint) {
-		rc.rep.warn("%s: stage hint sits fully above Quaver's hit line (osu! centres it); it may look shifted by half its height.", strings.ToUpper(m))
+		rc.rep.warnMode(keys, "stage hint sits fully above Quaver's hit line (osu! centres it); it may look shifted by half its height.")
 	}
 }
 

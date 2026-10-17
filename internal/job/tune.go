@@ -137,6 +137,9 @@ func (r *Result) Fields(mode int) []Field {
 	q := r.quaverLines(mode, sec)
 	out := make([]Field, 0, len(r.specs()))
 	for _, s := range r.specs() {
+		if s.per != nil && s.per(mode) == 0 {
+			continue // e.g. column spacing with a single column
+		}
 		f := Field{Key: s.key, Label: s.label, Hint: s.hint, Writes: s.writes, Min: s.min, Max: s.max}
 		if s.get != nil {
 			f.Value = formatNum(s.get(q))
@@ -182,9 +185,11 @@ func (r *Result) Set(mode int, key, value string) error {
 	case spec.set != nil:
 		spec.set(r.quaverLines(mode, sec), v)
 	case spec.per != nil:
-		if n := spec.per(mode); n > 0 {
-			sec.Set(key, strings.TrimSuffix(strings.Repeat(value+",", n), ","))
+		n := spec.per(mode)
+		if n == 0 {
+			return fmt.Errorf("%s doesn't apply to %dK", spec.label, mode)
 		}
+		sec.Set(key, strings.TrimSuffix(strings.Repeat(value+",", n), ","))
 	default:
 		sec.Set(key, value)
 	}

@@ -11,7 +11,7 @@ import (
 
 // IsOsuSkin reports whether the source's skin.ini looks like an osu! skin —
 // it has at least one [Mania] block — rather than a Quaver one (Quaver uses
-// [4K]/[7K] sections and has no [Mania]).
+// [nK] sections and has no [Mania]).
 func IsOsuSkin(src quaver.Source) bool {
 	data, err := src.ReadFile("skin.ini")
 	if err != nil {
@@ -48,7 +48,7 @@ func Reverse(src quaver.Source, opts Options) (*ReverseResult, error) {
 		}
 	}
 	if len(modes) == 0 {
-		return nil, fmt.Errorf("no convertible keymodes (4K/7K [Mania] blocks) found in this skin")
+		return nil, fmt.Errorf("no convertible keymodes (1K-10K [Mania] blocks) found in this skin")
 	}
 
 	ini := quaver.NewSkinIni()
@@ -128,7 +128,7 @@ func buildQuaverMode(ini *quaver.SkinIni, rc *revCtx, cfg *osu.Section, keys int
 		// osu! centres hit lighting on the hit line; Quaver on the receptor centre.
 		sec.SetInt("HitLightingY", roundI(QuaverHitLightingY(QuaverHitPosOffsetY(hitPos, recH), recH)))
 	} else {
-		rc.rep.warn("%dK: no receptor image found; HitPosOffsetY left at Quaver's default.", keys)
+		rc.rep.warnMode(keys, "no receptor image found; HitPosOffsetY left at Quaver's default.")
 	}
 	sec.Set("ColumnLightingScale", "1.0") // the light is written ColumnSize wide at osu!'s height
 

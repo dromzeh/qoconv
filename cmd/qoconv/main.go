@@ -70,7 +70,7 @@ func parseFlags() config {
 	flag.StringVar(&c.output, "output", job.DefaultOutputDir(), "Output directory (parent of the generated skin).")
 	flag.StringVar(&c.name, "name", "", "Override skin name (default: from the input skin.ini).")
 	flag.StringVar(&c.author, "author", "", "Override author (default: from the input skin.ini).")
-	flag.StringVar(&c.keymodes, "keymodes", "", "Comma list e.g. 4k,7k (default: all detected).")
+	flag.StringVar(&c.keymodes, "keymodes", "", "Comma list e.g. 4k,7k (default: every keymode the skin sets up).")
 	flag.BoolVar(&c.osk, "osk", true, "Also produce an importable archive (.osk, or .qs when converting to Quaver).")
 	flag.BoolVar(&c.grades, "grades", true, "Map letter grades between ranking-* and grade-small-* images.")
 	flag.BoolVar(&c.hitsounds, "hitsounds", true, "Map hitsounds between Quaver SFX and osu! normal-hit*.")

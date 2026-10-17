@@ -55,7 +55,10 @@ type Skin struct {
 	Direction Direction
 	Name      string
 	Author    string
-	Modes     []int // convertible keymodes found in the skin
+	Modes     []int // convertible keymodes found in the skin, converted by default
+	// Borrowed are keymodes a Quaver skin doesn't set up but Quaver still skins
+	// from its sharedk/ folder: convertible on request, off by default.
+	Borrowed []int
 
 	src    quaver.Source
 	quaver *quaver.Skin // set when Direction is ToOsu
@@ -94,7 +97,12 @@ func Open(path string) (*Skin, error) {
 	s.quaver = sk
 	s.Name = g.Str("Name", "Converted Skin")
 	s.Author = g.Str("Author", "Unknown")
-	s.Modes = sk.PresentKeyModes()
+	s.Modes = sk.DefaultKeyModes()
+	for _, n := range sk.SharedKeyModes() {
+		if !slices.Contains(s.Modes, n) {
+			s.Borrowed = append(s.Borrowed, n)
+		}
+	}
 	return s, nil
 }
 

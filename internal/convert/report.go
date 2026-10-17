@@ -15,6 +15,31 @@ type Report struct {
 	Positions  []string // per-keymode computed-position summary
 	Warnings   []string // calibration caveats
 	ToQuaver   bool     // reverse (osu! -> Quaver) run; adjusts wording
+
+	modeWarns map[string]*modeWarn // warnMode's lines, by message
+}
+
+// modeWarn is one warning shared by several keymodes.
+type modeWarn struct {
+	at    int      // its index in Warnings
+	modes []string // "4K", "7K", …
+}
+
+// warnMode records a warning about one keymode. The same warning for several
+// keymodes becomes a single line naming them all ("4K, 7K: …").
+func (r *Report) warnMode(mode int, format string, a ...any) {
+	msg := fmt.Sprintf(format, a...)
+	w, ok := r.modeWarns[msg]
+	if !ok {
+		if r.modeWarns == nil {
+			r.modeWarns = map[string]*modeWarn{}
+		}
+		w = &modeWarn{at: len(r.Warnings)}
+		r.modeWarns[msg] = w
+		r.Warnings = append(r.Warnings, "")
+	}
+	w.modes = append(w.modes, fmt.Sprintf("%dK", mode))
+	r.Warnings[w.at] = strings.Join(w.modes, ", ") + ": " + msg
 }
 
 func (r *Report) converted(format string, a ...any) {

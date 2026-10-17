@@ -77,6 +77,42 @@ func buildSampleSkin(t *testing.T) string {
 	return path
 }
 
+// Every keymode writes its own images: converting 4K and 5K together must not
+// leave both [Mania] blocks pointing at whichever was converted last.
+func TestConvertKeepsKeymodesApart(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string][]byte{
+		"skin.ini":                           []byte("[4K]\nColumnSize = 80\n[5K]\nColumnSize = 70\n"),
+		"4k/HitObjects/note-hitobject-1.png": pngBytes(t, 40, 10),
+		"5k/HitObjects/note-hitobject-1.png": pngBytes(t, 40, 30),
+	}
+	for p, data := range files {
+		full := filepath.Join(dir, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sk, err := quaver.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Convert(sk, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range res.Skin.Mania {
+		want := "qo-" + strconv.Itoa(m.Keys) + "k-note-1"
+		if got, _ := m.KV.Get("NoteImage0"); got != want {
+			t.Errorf("%dK NoteImage0 = %q, want %q", m.Keys, got, want)
+		}
+	}
+	wantSize(t, res, "qo-4k-note-1.png", 40, 10)
+	wantSize(t, res, "qo-5k-note-1.png", 40, 30)
+}
+
 func TestConvertEndToEnd(t *testing.T) {
 	sk, err := quaver.Load(buildSampleSkin(t))
 	if err != nil {
@@ -100,12 +136,12 @@ func TestConvertEndToEnd(t *testing.T) {
 		"ComboPosition: 165",
 		"CursorRotate: 0",
 		"CursorCentre: 1",
-		"NoteImage0: qo-note-1",
-		"NoteImage0H: qo-head-1", // hold head
-		"NoteImage0L: qo-body-1", // hold body
-		"NoteImage3T: qo-tail-4", // hold tail
-		"KeyImage3D: qo-keyD-4",
-		"StageLeft: qo-stage-left",
+		"NoteImage0: qo-4k-note-1",
+		"NoteImage0H: qo-4k-head-1", // hold head
+		"NoteImage0L: qo-4k-body-1", // hold body
+		"NoteImage3T: qo-4k-tail-4", // hold tail
+		"KeyImage3D: qo-4k-keyD-4",
+		"StageLeft: qo-4k-stage-left",
 		"[Fonts]",
 		"ScorePrefix: score",
 	} {
@@ -115,9 +151,9 @@ func TestConvertEndToEnd(t *testing.T) {
 	}
 
 	wantFiles := []string{
-		"qo-note-1.png", "qo-note-4.png", "qo-head-1.png", "qo-body-1.png", "qo-tail-1.png",
-		"qo-key-1.png", "qo-keyD-4.png",
-		"qo-stage-left.png", "mania-hit300g.png", "mania-hit0.png",
+		"qo-4k-note-1.png", "qo-4k-note-4.png", "qo-4k-head-1.png", "qo-4k-body-1.png", "qo-4k-tail-1.png",
+		"qo-4k-key-1.png", "qo-4k-keyD-4.png",
+		"qo-4k-stage-left.png", "mania-hit300g.png", "mania-hit0.png",
 		"scorebar-bg.png", "scorebar-colour.png", "cursor.png", "cursor@2x.png",
 		"cursortrail.png", // blanked: Quaver has no trail
 		"score-0.png", "combo-9.png", "pause-overlay.png", "skin.ini",
@@ -135,16 +171,16 @@ func TestConvertEndToEnd(t *testing.T) {
 
 	// Receptor: 250x400 source scaled like Quaver draws it — ColumnSize (140)
 	// wide, aspect height 224 — with no bottom pad (ReceptorPosOffsetY = 0).
-	if w, h, err := imageops.Size(res.Output.Files["qo-key-1.png"]); err != nil || w != 140 || h != 224 {
-		t.Errorf("qo-key-1 size = %dx%d (err %v), want 140x224 (aspect-scaled)", w, h, err)
+	if w, h, err := imageops.Size(res.Output.Files["qo-4k-key-1.png"]); err != nil || w != 140 || h != 224 {
+		t.Errorf("qo-4k-key-1 size = %dx%d (err %v), want 140x224 (aspect-scaled)", w, h, err)
 	}
 
 	// Stage hint: 566x30 drawn 560 (4×140) wide by Quaver -> 29.7 tall; osu!
 	// draws it 1.442× its pixel height, so 21px, then bottom-padded by its own
 	// height so its bottom edge sits on osu!'s centred hit line.
-	wantSize(t, res, "qo-stage-hint.png", 560, 42)
+	wantSize(t, res, "qo-4k-stage-hint.png", 560, 42)
 	// Stage border: Quaver keeps its aspect at full 768 height -> 43*768/677.
-	wantSize(t, res, "qo-stage-left.png", 49, 677)
+	wantSize(t, res, "qo-4k-stage-left.png", 49, 677)
 	// Cursor: forced square at Quaver's 40px-on-1080 size.
 	wantSize(t, res, "cursor.png", 28, 28)
 	wantSize(t, res, "cursor@2x.png", 57, 57)
@@ -202,7 +238,7 @@ func TestEncodeFailureWarns(t *testing.T) {
 		t.Fatal(err)
 	}
 	warns := strings.Join(res.Report.Warnings, "\n")
-	for _, f := range []string{"qo-lightingN-0.png", "qo-lightingN-1.png"} {
+	for _, f := range []string{"qo-4k-lightingN-0.png", "qo-4k-lightingN-1.png"} {
 		if !strings.Contains(warns, "could not encode "+f) {
 			t.Errorf("no warning for %s:\n%s", f, warns)
 		}

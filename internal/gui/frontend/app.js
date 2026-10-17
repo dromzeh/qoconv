@@ -19,6 +19,13 @@ const logos = { "osu!": "logos/osu.svg", Quaver: "logos/quaver.svg" };
 // Marks shown in white on the convert button.
 const buttonLogos = { "osu!": "logos/osu-white.svg", Quaver: "logos/quaver.svg" };
 
+// Every keymode Quaver plays. Both keymode controls lay all of them out, so
+// each one always sits in the same spot.
+const KEYMODES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+// The keymode to show first: the most played one the skin has.
+const firstMode = (modes) => [4, 7].find((m) => modes.includes(m)) ?? modes[0];
+
 // Shown, disabled, before a skin is loaded.
 const placeholderRows = ["Hit position", "Column start", "Column width", "Column spacing", "Combo position", "Judgement position", "Light position"];
 
@@ -69,7 +76,7 @@ async function load(path) {
   status("Reading skin…");
   try {
     const skin = await api().Load(path);
-    Object.assign(state, { skin, preview: null, modes: [...skin.modes], mode: skin.modes[0] });
+    Object.assign(state, { skin, preview: null, modes: [...skin.modes], mode: firstMode(skin.modes) });
     state.overrides.clear();
     renderSkin();
     await convert();
@@ -189,7 +196,8 @@ async function convert() {
     });
     if (seq !== state.seq) return;
     state.preview = preview;
-    if (!preview.modes.some((m) => m.mode === state.mode)) state.mode = preview.modes[0]?.mode;
+    const converted = preview.modes.map((m) => m.mode);
+    if (!converted.includes(state.mode)) state.mode = firstMode(converted);
     renderPreview();
     status("");
   } catch (e) {
@@ -228,20 +236,33 @@ function renderSkin() {
   $("convert-label").textContent = `Convert to ${s.to}`;
   $("convert-logo").src = buttonLogos[s.to];
   $("convert-logo").hidden = false;
-  $("mode-checks").replaceChildren(...s.modes.map((m) => {
-    const box = h("input", { type: "checkbox", checked: state.modes.includes(m) });
-    box.addEventListener("change", () => toggleMode(m, box));
-    return h("label", {}, box, ` ${m}K`);
-  }));
+  renderModeChips();
   syncInstall();
 }
 
-function toggleMode(m, box) {
-  if (!box.checked && state.modes.length === 1) {
-    box.checked = true;
-    return status("Keep at least one keymode.", { error: true });
-  }
-  state.modes = box.checked ? [...state.modes, m].sort((a, b) => a - b) : state.modes.filter((x) => x !== m);
+// Output: which keymodes to convert. Keymodes a Quaver skin doesn't set up but
+// Quaver fills in from its shared keymode are offered too, off until picked.
+function renderModeChips() {
+  const s = state.skin, extra = s.extra ?? [];
+  $("mode-chips").replaceChildren(...KEYMODES.map((m) => {
+    const borrowed = extra.includes(m);
+    return h("button", {
+      type: "button",
+      class: borrowed && "borrowed",
+      "aria-pressed": String(state.modes.includes(m)),
+      disabled: !borrowed && !s.modes.includes(m),
+      title: borrowed && `This skin doesn't set up ${m}K; Quaver fills it in from the skin's shared keymode`,
+      onclick: () => toggleMode(m),
+    }, `${m}K`);
+  }));
+}
+
+function toggleMode(m) {
+  const on = state.modes.includes(m);
+  if (on && state.modes.length === 1) return status("Keep at least one keymode.", { error: true });
+  state.modes = on ? state.modes.filter((x) => x !== m) : [...state.modes, m].sort((a, b) => a - b);
+  if (!on) state.mode = m; // show what was just added
+  renderModeChips();
   convert();
 }
 
@@ -254,11 +275,7 @@ function syncInstall() {
 
 function renderPreview() {
   const p = state.preview;
-  $("mode-tabs").replaceChildren(...p.modes.map((m) => h("button", {
-    type: "button", role: "tab", "aria-selected": String(m.mode === state.mode),
-    onclick: () => { state.mode = m.mode; renderPreview(); },
-  }, `${m.mode}K`)));
-  $("mode-tabs").hidden = p.modes.length < 2;
+  renderModeSwitch();
 
   const view = p.modes.find((m) => m.mode === state.mode);
   if (view) {
@@ -270,6 +287,66 @@ function renderPreview() {
 }
 
 const changedIn = (mode) => [...state.overrides.keys()].filter((k) => k.startsWith(`${mode}:`));
+
+// ---------- keymode switcher ----------
+
+// The current keymode, opening a 1K-10K grid of the converted ones; a dot
+// marks any with tuned values.
+function renderModeSwitch() {
+  const modes = state.preview.modes.map((v) => v.mode);
+  $("keymode").hidden = false;
+  $("mode-label").textContent = `${state.mode}K`;
+  $("mode-btn").disabled = modes.length < 2;
+  if (modes.length < 2) closeModeGrid();
+  $("mode-grid").replaceChildren(...KEYMODES.map((m) => {
+    const tuned = changedIn(m).length > 0;
+    return h("button", {
+      type: "button",
+      class: tuned && "changed",
+      "aria-current": String(m === state.mode),
+      disabled: !modes.includes(m),
+      title: tuned && `${m}K has tuned values`,
+      onclick: () => pickMode(m),
+    }, `${m}K`);
+  }));
+}
+
+function pickMode(m) {
+  state.mode = m;
+  closeModeGrid();
+  renderPreview();
+  $("mode-btn").focus();
+}
+
+function toggleModeGrid() {
+  if (!$("mode-grid").hidden) return closeModeGrid();
+  renderModeSwitch(); // tuning since the last render may have moved the dots
+  $("mode-grid").hidden = false;
+  $("mode-btn").setAttribute("aria-expanded", "true");
+  $("mode-grid").querySelector('[aria-current="true"]')?.focus();
+}
+
+function closeModeGrid() {
+  $("mode-grid").hidden = true;
+  $("mode-btn").setAttribute("aria-expanded", "false");
+}
+
+// Arrow keys move through the grid, skipping keymodes that weren't converted.
+function modeGridKeys(e) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeModeGrid();
+    return $("mode-btn").focus();
+  }
+  const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -5, ArrowDown: 5 }[e.key];
+  const buttons = [...$("mode-grid").children];
+  const i = buttons.indexOf(document.activeElement);
+  if (!step || i < 0) return;
+  e.preventDefault();
+  for (let j = i + step; j >= 0 && j < buttons.length; j += step) {
+    if (!buttons[j].disabled) return buttons[j].focus();
+  }
+}
 
 function syncResetAll() {
   $("reset-all").hidden = changedIn(state.mode).length === 0 || !$("pane-output").hidden;
@@ -489,7 +566,10 @@ function wire() {
   $("browse-folder").addEventListener("click", () => browse(true));
   document.addEventListener("pointerdown", (e) => {
     if (picker.open && !e.target.closest(".banner-wrap")) closePicker();
+    if (!$("mode-grid").hidden && !e.target.closest(".keymode")) closeModeGrid();
   });
+  $("mode-btn").addEventListener("click", toggleModeGrid);
+  $("mode-grid").addEventListener("keydown", modeGridKeys);
 
   $("convert").addEventListener("click", save);
   $("reset-all").addEventListener("click", () => resetFields(changedIn(state.mode)));

@@ -1,7 +1,6 @@
 package job
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,7 +19,7 @@ type Installed struct {
 	Game string `json:"game"` // "osu!" or "Quaver"
 }
 
-// InstalledSkins lists the 4K/7K skins in osu!stable's and Quaver's skins
+// InstalledSkins lists the 1K-10K skins in osu!stable's and Quaver's skins
 // folders, osu! first, each sorted by name. Folders that can't be read are
 // skipped: this is a convenience list, not an inventory.
 func InstalledSkins() []Installed {
@@ -75,16 +74,15 @@ func osuConvertible(_ string, ini []byte) bool {
 }
 
 func quaverConvertible(dir string, ini []byte) bool {
-	sk := quaver.ParseString(string(ini))
-	for _, n := range quaver.SupportedKeyModes {
-		if sk.KeyMode(n) != nil {
-			return true
-		}
-		if fi, err := os.Stat(filepath.Join(dir, fmt.Sprintf("%dk", n))); err == nil && fi.IsDir() {
-			return true
+	entries, _ := os.ReadDir(dir)
+	folders := map[string]bool{}
+	for _, e := range entries {
+		if e.IsDir() {
+			folders[strings.ToLower(e.Name())] = true
 		}
 	}
-	return false
+	own, shared := quaver.ParseString(string(ini)).KeyModesWith(func(name string) bool { return folders[name] })
+	return len(own)+len(shared) > 0
 }
 
 // osuSkinDirs returns osu!stable's skins folder. (osu!lazer keeps skins in its

@@ -81,7 +81,7 @@ func buildMania(cfg *quaver.Section, keys int, rec QuaverReceptor, hitPosition i
 
 	kv.SetInt("ColumnStart", ColumnStart(cfg.Float("ColumnAlignment", 0), colWidth, spacing, keys))
 	kv.Set("ColumnWidth", csv(colWidth, keys))
-	if spacing != 0 {
+	if spacing != 0 && keys > 1 {
 		kv.Set("ColumnSpacing", csv(spacing, keys-1))
 	}
 	// Quaver sizes note heights from WidthForNoteHeightScale when set, else from
