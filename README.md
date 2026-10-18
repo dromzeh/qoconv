@@ -9,7 +9,9 @@ Convert your Quaver skins to osu!mania and back. Drop a skin into the app, tune 
 
 <a href="https://github.com/dromzeh/qoconv/releases/latest"><img src="https://shieldcn.dev/badge/Download-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-blue.svg?size=lg&logo=ri:FiDownload" alt="Download for Windows, macOS and Linux"></a>
 
-<img src="https://x.dromzeh.dev/ShareX/2026/10/qoconv_vIPtcaooEn.png" alt="qoconv converting an osu!mania skin to Quaver, with a to-scale 7K stage preview and layout sliders" width="640">
+https://github.com/user-attachments/assets/91c0719f-acf5-4174-a64f-bbf2fd2b164c
+
+<sub>Quaver source skin (left) & qoconv's osu! output (right)</sub>
 
 </div>
 
@@ -18,6 +20,13 @@ Convert your Quaver skins to osu!mania and back. Drop a skin into the app, tune 
 It works in both directions, Quaver to osu!mania and osu!mania to Quaver, and figures out which way to go from the input skin's `skin.ini`.
 
 Every position and size is computed from the skin's own geometry (receptor sizes, `HitPosOffsetY`, column sizes and so on) using the same maths each game uses to draw it. The osu!mania side is matched against osu!lazer's `Legacy*` skin classes (osu!stable, which I use, is closed-source), and the Quaver side against Quaver's own `SkinKeys` and playfield code. If something still needs a nudge, you can tune it live in the app.
+<details>
+<summary>In-app screenshot</summary>
+<br>
+<div align="center">
+<img src="https://x.dromzeh.dev/ShareX/2026/10/qoconv_vIPtcaooEn.png" alt="qoconv converting an osu!mania skin to Quaver, with a to-scale 7K stage preview and layout sliders" width="640">
+</div>
+</details>
 
 > [!NOTE]
 > The two games don't draw everything the same way, so a few things can only be matched as closely as the other game allows, like where the health bar sits. The conversion report lists anything that differs.
