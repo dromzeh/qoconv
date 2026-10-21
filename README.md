@@ -6,6 +6,7 @@ Convert your Quaver skins to osu!mania and back. Drop a skin into the app, tune 
 
 ![last commit](https://shieldcn.dev/github/last-commit/dromzeh/qoconv.svg?variant=outline&size=xs)
 ![license](https://shieldcn.dev/github/license/dromzeh/qoconv.svg?variant=outline&size=xs)
+![downloads](https://shieldcn.dev/github/downloads/dromzeh/qoconv.svg?variant=outline&size=xs)
 
 <a href="https://github.com/dromzeh/qoconv/releases/latest"><img src="https://shieldcn.dev/badge/Download-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-blue.svg?size=lg&logo=ri:FiDownload" alt="Download for Windows, macOS and Linux"></a>
 
